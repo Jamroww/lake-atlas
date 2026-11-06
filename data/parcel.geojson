@@ -1,0 +1,147 @@
+{
+  "type": "FeatureCollection",
+  "name": "6-17.3",
+  "metadata": {
+    "generator": "fetch_parcel.py",
+    "generated_utc": "2026-11-06T20:20:38Z",
+    "source": {
+      "service_url": "https://services.wvgis.wvu.edu/arcgis/rest/services/Planning_Cadastre/WV_Parcels/MapServer",
+      "layer_id": 0,
+      "layer_name": "WVParcels",
+      "query_url": "https://services.wvgis.wvu.edu/arcgis/rest/services/Planning_Cadastre/WV_Parcels/MapServer/0/query"
+    },
+    "query": {
+      "point": {
+        "lat": 39.470295695964,
+        "lon": -78.224465795623
+      },
+      "search_radius_m": 25.0,
+      "where": "1=1",
+      "spatial_relation": "intersects",
+      "input_crs": "EPSG:4326",
+      "output_crs": "EPSG:4326"
+    },
+    "geocoder": {
+      "matched_address": "310 RED GATE RETREAT WAY, BERKELEY SPRINGS, WV, 25411",
+      "lat": 39.470295695964,
+      "lon": -78.224465795623,
+      "source": "U.S. Census Geocoder (Public_AR_Current)",
+      "query_address": "310 Red Gate Retreat, Berkeley Springs, WV"
+    },
+    "selection": "parcel containing the query point",
+    "candidate_count": 2,
+    "selected_count": 1,
+    "disclaimer": "Parcel boundaries are planning data, not a legal survey. Verify against recorded county records before use."
+  },
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              -78.2187974,
+              39.4689934
+            ],
+            [
+              -78.2181404,
+              39.4717759
+            ],
+            [
+              -78.2185268,
+              39.4717776
+            ],
+            [
+              -78.2194145,
+              39.4717736
+            ],
+            [
+              -78.2194215,
+              39.4717735
+            ],
+            [
+              -78.2219213,
+              39.4717162
+            ],
+            [
+              -78.2219515,
+              39.4717157
+            ],
+            [
+              -78.2240162,
+              39.4716786
+            ],
+            [
+              -78.2244337,
+              39.4704847
+            ],
+            [
+              -78.2249968,
+              39.4704534
+            ],
+            [
+              -78.2250237,
+              39.4704519
+            ],
+            [
+              -78.2250572,
+              39.4702665
+            ],
+            [
+              -78.2250854,
+              39.4700805
+            ],
+            [
+              -78.2251019,
+              39.4699485
+            ],
+            [
+              -78.2250821,
+              39.469949
+            ],
+            [
+              -78.2246976,
+              39.4699581
+            ],
+            [
+              -78.2237876,
+              39.4696721
+            ],
+            [
+              -78.224128,
+              39.4689706
+            ],
+            [
+              -78.2187974,
+              39.4689934
+            ]
+          ]
+        ]
+      },
+      "properties": {
+        "Map": "0006",
+        "Parcel": "0017",
+        "Suffix": "0003",
+        "Label": "6-17.3",
+        "CleanParcelID": "33080006001700030000",
+        "GISPID": "33-08-0006-0017-0003",
+        "ROOTID": "33-08-   6-0017-0003-0000",
+        "CODIST": "3308",
+        "Dist": "08",
+        "OBJECTID": 918086,
+        "CountyID": "33",
+        "FullLegalDescription": "NR GREENWOOD 37.895 AC",
+        "FullOwnerName": "DARSCH DAVID M",
+        "FullOwnerAddress": "310 RED GATE RETREAT WAY, BERKELEY SPRINGS, WV 25411",
+        "FullPhysicalAddress": "310 RED GATE RETREAT WAY",
+        "IAS_LEGAL": "NR GREENWOOD 37.895 AC  ",
+        "OWNER1": "DARSCH DAVID M",
+        "OWNER2": null,
+        "COUNTY": "33",
+        "CALC_ACRE": 37.95526398,
+        "name": "6-17.3"
+      }
+    }
+  ]
+}

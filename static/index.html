@@ -1,0 +1,4790 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#24352b">
+  <meta name="description" content="A private, client-facing bathymetric field atlas for Deeper Pro 2 sonar surveys.">
+  <title>The Lake Atlas · Bathymetry &amp; Stewardship</title>
+
+  <!-- Mapbox GL JS -->
+  <link href="https://api.mapbox.com/mapbox-gl-js/v3.8.0/mapbox-gl.css" rel="stylesheet">
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.8.0/mapbox-gl.js"></script>
+
+  <!-- Browser-side parsing + spatial analysis -->
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.5.3/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.2.0/turf.min.js"></script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Karla:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    /* ================================================================
+       01. DESIGN TOKENS
+       A restrained National Park palette: warm paper, forest ink,
+       oxidized clay, moss, and a single teal depth ramp.
+       ================================================================ */
+    :root {
+      color-scheme: light;
+      --paper:        #f2ecdc;
+      --paper-deep:   #e7dfcb;
+      --paper-light:  #faf6ea;
+      --surface:      #f8f3e6;
+      --ink:          #243027;
+      --ink-soft:     #4e584b;
+      --muted:        #777b6c;
+      --line:         #cec5ae;
+      --line-strong:  #998f78;
+      --forest:       #2f4a38;
+      --forest-deep:  #203528;
+      --moss:         #72805a;
+      --sage:         #b6bea1;
+      --clay:         #9c5f3e;
+      --clay-deep:    #7d452d;
+      --ochre:        #b48a4e;
+      --water:        #4d7c74;
+      --water-deep:   #173f40;
+      --shadow:       0 22px 56px rgba(41, 48, 36, .17);
+      --shadow-soft:  0 10px 26px rgba(41, 48, 36, .12);
+      --serif:  "Fraunces", Georgia, "Times New Roman", serif;
+      --sans:   "Karla", "Segoe UI", sans-serif;
+      --cond:   "Barlow Condensed", "Arial Narrow", sans-serif;
+      --radius: 2px;
+      --sidebar-width: 414px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+    html, body { margin: 0; min-height: 100%; }
+    body {
+      overflow: hidden;
+      background: #d6cebb;
+      color: var(--ink);
+      font-family: var(--sans);
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    button, input, select { font: inherit; }
+    button { color: inherit; }
+    a { color: var(--clay-deep); text-underline-offset: 3px; }
+    [hidden] { display: none !important; }
+    ::selection { background: rgba(156, 95, 62, .22); }
+    :focus-visible { outline: 2px solid var(--clay); outline-offset: 3px; }
+
+    /* ================================================================
+       02. APP SHELL
+       ================================================================ */
+    .app {
+      display: grid;
+      grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+      width: 100%;
+      height: 100vh;
+      height: 100dvh;
+      background: var(--paper);
+      isolation: isolate;
+    }
+
+    .sidebar {
+      position: relative;
+      z-index: 20;
+      height: 100%;
+      min-height: 0;
+      background:
+        radial-gradient(circle at 18% 4%, rgba(255,255,255,.52), transparent 32%),
+        linear-gradient(135deg, rgba(177, 158, 121, .08), transparent 42%),
+        var(--paper);
+      border-right: 1px solid var(--line-strong);
+      box-shadow: 12px 0 40px rgba(46, 50, 39, .12);
+      overflow: hidden;
+    }
+    .sidebar::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      pointer-events: none;
+      opacity: .14;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.74' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.38'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+    .sidebar::after {
+      content: "";
+      position: absolute;
+      z-index: 0;
+      inset: 0 auto 0 11px;
+      width: 1px;
+      background: linear-gradient(transparent, rgba(154,143,120,.5) 8%, rgba(154,143,120,.5) 92%, transparent);
+      pointer-events: none;
+    }
+    .sidebar-scroll {
+      position: relative;
+      z-index: 1;
+      height: 100%;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-strong) transparent;
+    }
+    .sidebar-scroll::-webkit-scrollbar { width: 8px; }
+    .sidebar-scroll::-webkit-scrollbar-thumb {
+      background: rgba(153, 143, 120, .55);
+      border-radius: 99px;
+      border: 2px solid var(--paper);
+    }
+    .sidebar-inner {
+      position: relative;
+      padding: 26px 27px 30px 34px;
+    }
+
+    .sheet-handle {
+      display: none;
+      width: 100%;
+      height: 36px;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      border: 0;
+      border-bottom: 1px solid rgba(153, 143, 120, .42);
+      background: rgba(247, 241, 228, .96);
+      color: var(--forest);
+      font-family: var(--cond);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      cursor: pointer;
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      backdrop-filter: blur(10px);
+    }
+    .sheet-grip {
+      width: 34px;
+      height: 3px;
+      border-radius: 99px;
+      background: rgba(47, 74, 56, .35);
+      position: absolute;
+      top: 7px;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .sheet-handle svg {
+      width: 12px;
+      height: 12px;
+      flex: none;
+      transition: transform .3s ease;
+    }
+    .sidebar.is-open .sheet-handle svg { transform: rotate(180deg); }
+
+    /* ================================================================
+       03. SIDEBAR HEADER + SURVEY STRIP
+       ================================================================ */
+    .masthead {
+      display: grid;
+      grid-template-columns: 55px minmax(0, 1fr) 30px;
+      gap: 13px;
+      align-items: center;
+      padding-bottom: 18px;
+      border-bottom: 3px double var(--line-strong);
+    }
+    .seal {
+      width: 55px;
+      height: 55px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--forest);
+      border-radius: 50%;
+      color: var(--forest);
+      background:
+        radial-gradient(circle, rgba(255,255,255,.52) 0 52%, transparent 53%),
+        repeating-conic-gradient(from 0deg, rgba(47,74,56,.08) 0deg 2deg, transparent 2deg 30deg);
+      box-shadow:
+        inset 0 0 0 3px var(--paper),
+        inset 0 0 0 4px rgba(47, 74, 56, .36);
+    }
+    .seal svg { width: 32px; height: 32px; }
+    .eyebrow {
+      margin: 0 0 5px;
+      color: var(--clay-deep);
+      font-family: var(--cond);
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: .19em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .masthead h1 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 30px;
+      font-weight: 600;
+      font-variation-settings: "opsz" 44;
+      letter-spacing: -.035em;
+      line-height: .94;
+    }
+    .masthead-sub {
+      margin: 6px 0 0;
+      color: var(--ink-soft);
+      font-size: 10px;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+    }
+    .icon-btn {
+      width: 30px;
+      height: 30px;
+      display: grid;
+      place-items: center;
+      border: 1px solid transparent;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--ink-soft);
+      cursor: pointer;
+      transition: border-color .18s ease, background .18s ease, transform .3s ease;
+    }
+    .icon-btn:hover {
+      border-color: var(--line);
+      background: rgba(255,255,255,.38);
+      transform: rotate(24deg);
+    }
+    .icon-btn svg { width: 17px; height: 17px; }
+
+    .survey-strip {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-top: 13px;
+      padding: 8px 0;
+      color: var(--ink-soft);
+      font-family: var(--cond);
+      font-size: 10.5px;
+      font-weight: 500;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+      border-bottom: 1px solid var(--line);
+    }
+    .survey-status { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--clay);
+      box-shadow: 0 0 0 3px rgba(156, 95, 62, .12);
+      flex: none;
+    }
+    .status-dot.is-live {
+      background: var(--forest);
+      box-shadow: 0 0 0 3px rgba(47, 74, 56, .12);
+    }
+    #surveyState { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    #surveyNo { color: var(--muted); white-space: nowrap; }
+
+    /* ================================================================
+       04. REUSABLE TYPOGRAPHY + BUTTONS
+       ================================================================ */
+    .section-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 23px 0 12px;
+    }
+    .section-num {
+      color: var(--clay);
+      font-family: var(--cond);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .18em;
+    }
+    .section-head h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 17.5px;
+      font-weight: 500;
+      letter-spacing: -.018em;
+      white-space: nowrap;
+    }
+    .section-head::after {
+      content: "";
+      order: 3;
+      flex: 1;
+      height: 1px;
+      margin-left: 3px;
+      background: linear-gradient(90deg, var(--line), transparent);
+    }
+    .section-note {
+      order: 4;
+      color: var(--muted);
+      font-family: var(--cond);
+      font-size: 9.5px;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      min-height: 38px;
+      padding: 0 14px;
+      border: 1px solid transparent;
+      border-radius: var(--radius);
+      font-family: var(--cond);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .13em;
+      line-height: 1;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background .18s ease, color .18s ease, border-color .18s ease, transform .18s ease, box-shadow .18s ease;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn:active { transform: translateY(0); }
+    .btn:disabled { cursor: wait; opacity: .62; transform: none; }
+    .btn-primary {
+      color: #fbf7eb;
+      background: var(--forest);
+      border-color: var(--forest);
+      box-shadow: 0 5px 14px rgba(35, 59, 44, .18);
+    }
+    .btn-primary:hover { background: var(--forest-deep); border-color: var(--forest-deep); }
+    .btn-outline {
+      color: var(--forest);
+      background: rgba(255,255,255,.24);
+      border-color: var(--line-strong);
+    }
+    .btn-outline:hover { background: rgba(255,255,255,.55); border-color: var(--forest); }
+    .btn-quiet {
+      color: var(--ink-soft);
+      background: transparent;
+      border-color: transparent;
+      padding-inline: 8px;
+    }
+    .btn-quiet:hover { color: var(--clay-deep); background: rgba(156,95,62,.07); }
+    .btn svg { width: 14px; height: 14px; flex: none; }
+
+    .text-link {
+      border: 0;
+      padding: 0;
+      background: none;
+      color: var(--clay-deep);
+      font: inherit;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      cursor: pointer;
+    }
+
+    /* ================================================================
+       05. DATA INTAKE
+       ================================================================ */
+    .intake-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+    }
+    .dropzone {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+      min-height: 121px;
+      padding: 12px 12px 11px;
+      overflow: hidden;
+      text-align: left;
+      border: 1px dashed var(--line-strong);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(145deg, rgba(255,255,255,.34), rgba(255,255,255,.06)),
+        rgba(247, 242, 230, .48);
+      cursor: pointer;
+      transition: background .2s ease, border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+    }
+    .dropzone:hover,
+    .dropzone.is-dragging {
+      border-color: var(--forest);
+      background: rgba(255, 252, 243, .72);
+      box-shadow: inset 0 0 0 2px rgba(47,74,56,.06);
+      transform: translateY(-1px);
+    }
+    .dropzone.is-loaded {
+      border-style: solid;
+      border-color: rgba(114, 128, 90, .75);
+      background:
+        linear-gradient(145deg, rgba(255,255,255,.48), rgba(231,239,222,.3)),
+        var(--surface);
+    }
+    .dropzone.is-error { border-color: var(--clay); background: rgba(156,95,62,.06); }
+    .dropzone:disabled { cursor: wait; opacity: .7; transform: none; }
+    .drop-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: auto;
+    }
+    .drop-icon {
+      display: grid;
+      place-items: center;
+      width: 31px;
+      height: 31px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      color: var(--forest);
+      background: rgba(255,255,255,.34);
+    }
+    .drop-icon svg { width: 15px; height: 15px; }
+    .drop-badge {
+      padding-top: 3px;
+      color: var(--muted);
+      font-family: var(--cond);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    .drop-title {
+      display: block;
+      margin-top: 12px;
+      font-family: var(--serif);
+      font-size: 14.5px;
+      font-weight: 500;
+      letter-spacing: -.01em;
+      line-height: 1.12;
+    }
+    .drop-detail {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 9.5px;
+      line-height: 1.35;
+    }
+    .drop-file {
+      display: block;
+      width: 100%;
+      margin-top: 9px;
+      padding-top: 7px;
+      overflow: hidden;
+      color: var(--forest);
+      font-family: var(--cond);
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: .07em;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      text-transform: uppercase;
+      white-space: nowrap;
+      border-top: 1px solid rgba(153,143,120,.3);
+    }
+    .dropzone.is-loaded .drop-file { color: var(--moss); }
+
+    .intake-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    .intake-actions .btn { min-height: 32px; }
+    .data-status {
+      min-height: 17px;
+      margin: 9px 0 0;
+      color: var(--muted);
+      font-size: 10.5px;
+      line-height: 1.45;
+    }
+    .data-status.is-error { color: var(--clay-deep); }
+    .data-status.is-working { color: var(--forest); }
+    .inline-spinner {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      margin-right: 5px;
+      border: 1px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      animation: spin .75s linear infinite;
+      vertical-align: -1px;
+    }
+
+    /* ================================================================
+       06. STAT TILES + MEASUREMENTS
+       ================================================================ */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: var(--line);
+      box-shadow: var(--shadow-soft);
+    }
+    .stat {
+      min-height: 91px;
+      padding: 13px 13px 11px;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.42), transparent 56%),
+        var(--surface);
+    }
+    .stat-label {
+      margin: 0;
+      color: var(--ink-soft);
+      font-family: var(--cond);
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: .13em;
+      line-height: 1.2;
+      text-transform: uppercase;
+    }
+    .stat-value {
+      display: flex;
+      align-items: baseline;
+      gap: 3px;
+      margin: 9px 0 3px;
+      color: var(--forest-deep);
+      font-family: var(--sans);
+      font-size: 27px;
+      font-weight: 700;
+      letter-spacing: -.055em;
+      line-height: .92;
+    }
+    .stat-value .unit {
+      color: var(--muted);
+      font-family: var(--cond);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .09em;
+      text-transform: uppercase;
+    }
+    .stat-foot {
+      margin: 0;
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 1.3;
+    }
+    .measurements {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 7px;
+      margin: 10px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .measurements li {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 4px 7px;
+      border: 1px solid rgba(153,143,120,.35);
+      color: var(--ink-soft);
+      background: rgba(255,255,255,.22);
+      font-family: var(--cond);
+      font-size: 9.5px;
+      letter-spacing: .06em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .measurements li::before {
+      content: "";
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--clay);
+      opacity: .7;
+    }
+
+    /* ================================================================
+       07. CARE NOTES
+       ================================================================ */
+    .care-intro {
+      margin: -2px 0 10px;
+      color: var(--ink-soft);
+      font-size: 11.5px;
+      line-height: 1.58;
+    }
+    .care-intro strong { color: var(--forest); font-weight: 600; }
+    .care-list { border-top: 1px solid var(--line); }
+    .care-card { border-bottom: 1px solid var(--line); }
+    .care-toggle {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      gap: 8px;
+      padding: 11px 0 9px;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .care-num {
+      width: 22px;
+      flex: none;
+      color: var(--clay);
+      font-family: var(--cond);
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: .12em;
+    }
+    .care-title {
+      flex: 1;
+      font-family: var(--serif);
+      font-size: 15.5px;
+      font-weight: 500;
+      letter-spacing: -.012em;
+    }
+    .care-kicker {
+      color: var(--muted);
+      font-family: var(--cond);
+      font-size: 8.5px;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+    }
+    .care-chevron {
+      width: 14px;
+      height: 14px;
+      color: var(--muted);
+      transition: transform .25s ease;
+      flex: none;
+    }
+    .care-card.is-open .care-chevron { transform: rotate(180deg); }
+    .care-body {
+      display: grid;
+      grid-template-rows: 0fr;
+      transition: grid-template-rows .3s ease;
+    }
+    .care-card.is-open .care-body { grid-template-rows: 1fr; }
+    .care-body-inner { min-height: 0; overflow: hidden; }
+    .narrative {
+      min-height: 54px;
+      margin: 0 0 12px 22px;
+      padding: 1px 0 1px 9px;
+      border-left: 1px solid transparent;
+      color: var(--ink-soft);
+      font-size: 12px;
+      line-height: 1.66;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      outline: 0;
+      transition: background .18s ease, border-color .18s ease;
+    }
+    .narrative:hover { background: rgba(255,255,255,.2); }
+    .narrative:focus {
+      border-left-color: var(--clay);
+      background: rgba(255,255,255,.38);
+    }
+    .narrative.is-empty::before {
+      content: attr(data-placeholder);
+      color: var(--muted);
+      font-style: italic;
+      pointer-events: none;
+    }
+    .narrative:focus.is-empty::before { opacity: .55; }
+    .editable-tag {
+      display: inline-block;
+      margin-left: 4px;
+      padding: 2px 5px;
+      color: var(--moss);
+      border: 1px solid rgba(114,128,90,.45);
+      font-family: var(--cond);
+      font-size: 8px;
+      font-style: normal;
+      font-weight: 600;
+      letter-spacing: .12em;
+      line-height: 1.25;
+      text-transform: uppercase;
+      vertical-align: 1px;
+    }
+    .care-actions {
+      display: grid;
+      grid-template-columns: 1.55fr 1fr;
+      gap: 7px;
+      margin-top: 13px;
+    }
+    .care-actions .btn { min-height: 39px; padding-inline: 9px; }
+    .api-hint {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 9.5px;
+      line-height: 1.5;
+    }
+    .api-hint code {
+      padding: 1px 4px;
+      color: var(--forest);
+      background: rgba(47,74,56,.07);
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 8.5px;
+      overflow-wrap: anywhere;
+    }
+    .sidebar-footer {
+      margin-top: 22px;
+      padding-top: 13px;
+      border-top: 3px double var(--line-strong);
+      color: var(--muted);
+      font-family: var(--cond);
+      font-size: 9px;
+      letter-spacing: .06em;
+      line-height: 1.6;
+      text-transform: uppercase;
+    }
+    .sidebar-footer p { margin: 0 0 5px; }
+    .sidebar-footer .footer-mark { color: var(--forest); font-weight: 600; letter-spacing: .12em; }
+
+    /* ================================================================
+       08. MAP SURFACE
+       ================================================================ */
+    .map-shell {
+      position: relative;
+      min-width: 0;
+      height: 100%;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 25% 28%, rgba(255,255,255,.52), transparent 24%),
+        repeating-radial-gradient(ellipse at 62% 55%, transparent 0 17px, rgba(78,88,75,.07) 18px 19px, transparent 20px 38px),
+        #d9d3c1;
+      isolation: isolate;
+    }
+    #map { position: absolute; inset: 0; }
+    .map-wash,
+    .map-grain {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 3;
+    }
+    .map-wash {
+      background:
+        radial-gradient(ellipse at 50% 42%, transparent 32%, rgba(63, 55, 34, .11) 100%),
+        linear-gradient(180deg, rgba(255, 245, 218, .12), rgba(224, 210, 180, .11));
+      mix-blend-mode: multiply;
+      opacity: .72;
+    }
+    .map-grain {
+      z-index: 4;
+      opacity: .055;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.6'/%3E%3C/svg%3E");
+      mix-blend-mode: multiply;
+    }
+    .mapboxgl-map { font-family: var(--sans); }
+    .mapboxgl-canvas { outline: 0; }
+    .mapboxgl-ctrl-top-right { top: 18px; right: 18px; z-index: 7; }
+    .mapboxgl-ctrl-group {
+      overflow: hidden;
+      border: 1px solid rgba(108, 103, 85, .42);
+      border-radius: 2px !important;
+      background: rgba(248, 243, 230, .94) !important;
+      box-shadow: 0 7px 20px rgba(43, 47, 37, .15) !important;
+      backdrop-filter: blur(8px);
+    }
+    .mapboxgl-ctrl-group button + button { border-top-color: rgba(153,143,120,.34) !important; }
+    .mapboxgl-ctrl-group button { width: 33px !important; height: 33px !important; }
+    .mapboxgl-ctrl button:hover { background-color: rgba(47,74,56,.08) !important; }
+    .mapboxgl-ctrl-attrib {
+      background: rgba(248, 243, 230, .82) !important;
+      color: var(--ink-soft) !important;
+      font-size: 9px !important;
+      border-radius: 2px 0 0 0;
+    }
+    .mapboxgl-ctrl-attrib a { color: var(--forest) !important; }
+    .mapboxgl-ctrl-scale {
+      border-color: rgba(47,74,56,.5) !important;
+      color: var(--forest) !important;
+      background: rgba(248,243,230,.7) !important;
+      font-family: var(--cond) !important;
+      font-size: 9px !important;
+      letter-spacing: .06em;
+    }
+    .mapboxgl-popup { z-index: 12; max-width: 270px !important; }
+    .mapboxgl-popup-content {
+      padding: 14px 16px 13px !important;
+      border: 1px solid var(--line-strong);
+      border-radius: 2px !important;
+      background: var(--paper-light) !important;
+      box-shadow: 0 15px 40px rgba(33, 40, 30, .23) !important;
+      color: var(--ink);
+    }
+    .mapboxgl-popup-tip { border-top-color: var(--paper-light) !important; border-bottom-color: var(--paper-light) !important; }
+    .popup-kicker {
+      margin: 0 0 4px;
+      color: var(--clay-deep);
+      font-family: var(--cond);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    .popup-title {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 17px;
+      font-weight: 500;
+      line-height: 1.1;
+    }
+    .popup-data {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 3px 11px;
+      margin: 10px 0 0;
+      font-size: 10.5px;
+      line-height: 1.4;
+    }
+    .popup-data dt { color: var(--muted); }
+    .popup-data dd { margin: 0; color: var(--ink-soft); font-weight: 600; }
+
+    /* ================================================================
+       09. MAP CHROME
+       ================================================================ */
+    .map-plate {
+      position: absolute;
+      z-index: 6;
+      top: 22px;
+      left: 22px;
+      width: min(312px, calc(100% - 110px));
+      padding: 14px 17px 13px;
+      border: 1px solid rgba(108, 103, 85, .58);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.42), transparent 58%),
+        rgba(247, 241, 228, .93);
+      box-shadow: 0 12px 34px rgba(38, 42, 31, .17);
+      backdrop-filter: blur(9px);
+      animation: plateIn .7s .15s both cubic-bezier(.2,.75,.25,1);
+    }
+    .map-plate::after {
+      content: "";
+      position: absolute;
+      inset: 4px;
+      pointer-events: none;
+      border: 1px solid rgba(153, 143, 120, .34);
+    }
+    .plate-kicker {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      margin: 0 0 5px;
+      color: var(--clay-deep);
+      font-family: var(--cond);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .18em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+    .sample-tag {
+      padding: 2px 5px;
+      border: 1px solid rgba(156,95,62,.45);
+      color: var(--clay-deep);
+      font-size: 7.5px;
+      letter-spacing: .14em;
+    }
+    .plate-title {
+      margin: 0;
+      overflow: hidden;
+      color: var(--forest-deep);
+      font-family: var(--serif);
+      font-size: 26px;
+      font-weight: 600;
+      font-variation-settings: "opsz" 38;
+      letter-spacing: -.035em;
+      line-height: 1.02;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .plate-property {
+      margin: 4px 0 0;
+      overflow: hidden;
+      color: var(--ink-soft);
+      font-size: 10px;
+      letter-spacing: .03em;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .plate-rule { height: 1px; margin: 10px 0 8px; background: linear-gradient(90deg, var(--line-strong), transparent); }
+    .plate-meta {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--muted);
+      font-family: var(--cond);
+      font-size: 8.5px;
+      letter-spacing: .095em;
+      line-height: 1.3;
+      text-transform: uppercase;
+    }
+    .plate-meta span { white-space: nowrap; }
+
+    .map-tools {
+      position: absolute;
+      z-index: 8;
+      right: 18px;
+      bottom: 38px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: stretch;
+    }
+    .map-tool {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 89px;
+      height: 35px;
+      padding: 0 10px;
+      border: 1px solid rgba(108, 103, 85, .42);
+      border-radius: 2px;
+      background: rgba(248, 243, 230, .94);
+      box-shadow: 0 6px 18px rgba(43, 47, 37, .13);
+      color: var(--forest);
+      font-family: var(--cond);
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: .11em;
+      text-transform: uppercase;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      transition: background .18s ease, border-color .18s ease, transform .18s ease;
+    }
+    .map-tool:hover { background: var(--paper-light); border-color: var(--forest); transform: translateX(-2px); }
+    .map-tool.is-active { color: var(--paper-light); background: var(--forest); border-color: var(--forest); }
+    .map-tool svg { width: 14px; height: 14px; flex: none; }
+
+    .layers-panel {
+      position: absolute;
+      z-index: 9;
+      right: 18px;
+      bottom: 172px;
+      width: 218px;
+      padding: 14px;
+      border: 1px solid var(--line-strong);
+      background: rgba(248, 243, 230, .97);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      animation: popIn .2s both ease-out;
+    }
+    .layers-panel::after {
+      content: "";
+      position: absolute;
+      inset: 4px;
+      border: 1px solid rgba(153,143,120,.24);
+      pointer-events: none;
+    }
+    .layers-title {
+      margin: 0 0 9px;
+      color: var(--forest);
+      font-family: var(--cond);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    .layer-row {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 29px;
+      color: var(--ink-soft);
+      font-size: 11px;
+      cursor: pointer;
+    }
+    .layer-row + .layer-row { border-top: 1px solid rgba(153,143,120,.22); }
+    .layer-row input {
+      width: 14px;
+      height: 14px;
+      margin: 0;
+      accent-color: var(--forest);
+      flex: none;
+    }
+    .layer-swatch {
+      width: 19px;
+      height: 4px;
+      margin-left: auto;
+      flex: none;
+      border-radius: 99px;
+    }
+    .layer-swatch.depth { background: linear-gradient(90deg, #dce7dc, #39706c, #173f40); }
+    .layer-swatch.herbs { background: repeating-linear-gradient(135deg, #7b8757 0 2px, transparent 2px 5px); }
+    .layer-swatch.fish { background: var(--clay); }
+    .layer-swatch.property { background: transparent; border-top: 2px dashed var(--clay); height: 2px; }
+
+    .map-legend {
+      position: absolute;
+      z-index: 6;
+      left: 20px;
+      bottom: 60px;
+      width: 207px;
+      padding: 12px 13px 11px;
+      border: 1px solid rgba(108, 103, 85, .42);
+      background: rgba(248, 243, 230, .93);
+      box-shadow: 0 9px 25px rgba(43, 47, 37, .13);
+      backdrop-filter: blur(8px);
+      animation: popIn .3s both ease-out;
+    }
+    .legend-title {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 7px;
+      color: var(--forest);
+      font-family: var(--cond);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    .legend-title span:last-child { color: var(--muted); font-size: 8px; letter-spacing: .08em; }
+    .depth-gradient {
+      height: 9px;
+      border: 1px solid rgba(63,74,58,.22);
+      background: linear-gradient(90deg, #dce7dc 0%, #aecab9 18%, #7fa99b 38%, #51877f 58%, #2d6563 78%, #173f40 100%);
+    }
+    .depth-ticks {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 4px;
+      color: var(--muted);
+      font-family: var(--cond);
+      font-size: 8.5px;
+      letter-spacing: .04em;
+      line-height: 1;
+    }
+    .legend-keys {
+      display: grid;
+      gap: 4px;
+      margin: 9px 0 0;
+      padding: 8px 0 0;
+      border-top: 1px solid rgba(153,143,120,.32);
+      list-style: none;
+    }
+    .legend-keys li {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--ink-soft);
+      font-size: 9px;
+      line-height: 1.2;
+    }
+    .legend-key {
+      width: 15px;
+      height: 5px;
+      flex: none;
+    }
+    .legend-key.herb {
+      background: repeating-linear-gradient(135deg, #7b8757 0 2px, transparent 2px 5px);
+      border: 1px solid rgba(110,122,85,.4);
+      height: 8px;
+    }
+    .legend-key.fountain {
+      width: 9px;
+      height: 9px;
+      margin-inline: 3px;
+      border-radius: 50%;
+      background: var(--clay);
+      box-shadow: 0 0 0 2px var(--paper-light), 0 0 0 3px rgba(156,95,62,.32);
+    }
+    .legend-key.fish {
+      width: 6px;
+      height: 6px;
+      margin-inline: 4px;
+      border-radius: 50%;
+      background: var(--clay);
+    }
+    .legend-key.parcel { border-top: 1.5px dashed var(--clay); }
+
+    .fountain-marker {
+      position: relative;
+      width: 48px;
+      height: 48px;
+      display: grid;
+      place-items: center;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      cursor: pointer;
+      filter: drop-shadow(0 4px 7px rgba(36, 48, 39, .22));
+    }
+    .fountain-marker::before,
+    .fountain-marker::after {
+      content: "";
+      position: absolute;
+      inset: 8px;
+      border: 1px solid rgba(156, 95, 62, .52);
+      border-radius: 50%;
+      animation: fountainPulse 3.4s ease-out infinite;
+    }
+    .fountain-marker::after { animation-delay: 1.7s; }
+    .fountain-marker svg {
+      position: relative;
+      z-index: 1;
+      width: 33px;
+      height: 33px;
+    }
+    .fountain-tag {
+      position: absolute;
+      top: 46px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 3px 6px;
+      white-space: nowrap;
+      border: 1px solid rgba(156,95,62,.38);
+      color: var(--clay-deep);
+      background: rgba(248, 243, 230, .92);
+      font-family: var(--cond);
+      font-size: 8px;
+      font-weight: 600;
+      letter-spacing: .1em;
+      line-height: 1;
+      text-transform: uppercase;
+      opacity: 0;
+      transition: opacity .2s ease;
+    }
+    .fountain-marker:hover .fountain-tag,
+    .fountain-marker:focus-visible .fountain-tag { opacity: 1; }
+
+    /* ================================================================
+       10. LOADING, LOCKED MAP, TOASTS
+       ================================================================ */
+    .map-loading {
+      position: absolute;
+      inset: 0;
+      z-index: 50;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at 50% 42%, rgba(255,255,255,.58), transparent 28%),
+        repeating-radial-gradient(ellipse at 52% 55%, transparent 0 23px, rgba(70,86,63,.07) 24px 25px, transparent 26px 54px),
+        linear-gradient(145deg, #e9e2d1, #d8d0bd);
+      transition: opacity .55s ease, visibility .55s ease;
+    }
+    .map-loading.is-hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+    .loading-card { text-align: center; }
+    .loading-compass {
+      width: 62px;
+      height: 62px;
+      margin: 0 auto 15px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 50%;
+      color: var(--forest);
+      background: rgba(248,243,230,.6);
+      box-shadow: inset 0 0 0 5px rgba(248,243,230,.7), inset 0 0 0 6px rgba(153,143,120,.3);
+      animation: compassBreathe 2.8s ease-in-out infinite;
+    }
+    .loading-compass svg { width: 37px; height: 37px; }
+    .loading-title {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 24px;
+      font-weight: 500;
+      letter-spacing: -.025em;
+    }
+    .loading-sub {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-family: var(--cond);
+      font-size: 9px;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+    .map-locked {
+      position: absolute;
+      z-index: 60;
+      top: 50%;
+      left: 50%;
+      width: min(360px, calc(100% - 40px));
+      padding: 24px;
+      border: 1px solid var(--line-strong);
+      background: rgba(248, 243, 230, .96);
+      box-shadow: var(--shadow);
+      transform: translate(-50%, -50%);
+      text-align: center;
+      backdrop-filter: blur(10px);
+    }
+    .map-locked h2 {
+      margin: 0 0 7px;
+      font-family: var(--serif);
+      font-size: 24px;
+      font-weight: 500;
+      letter-spacing: -.025em;
+    }
+    .map-locked p:not(.eyebrow) { margin: 0 0 16px; color: var(--ink-soft); font-size: 11.5px; line-height: 1.55; }
+
+    .toast {
+      position: absolute;
+      z-index: 70;
+      left: 50%;
+      bottom: 25px;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      max-width: min(440px, calc(100% - 32px));
+      padding: 10px 14px;
+      border: 1px solid rgba(255,255,255,.16);
+      border-radius: 2px;
+      color: #f8f3e6;
+      background: rgba(32, 53, 40, .96);
+      box-shadow: 0 14px 34px rgba(25, 31, 24, .28);
+      font-size: 11px;
+      line-height: 1.4;
+      transform: translate(-50%, 14px);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .24s ease, transform .24s ease;
+    }
+    .toast.is-visible { opacity: 1; transform: translate(-50%, 0); }
+    .toast.is-error { background: rgba(114, 59, 38, .97); }
+    .toast svg { width: 15px; height: 15px; flex: none; }
+
+    /* ================================================================
+       11. DIALOGS / DRAWERS
+       ================================================================ */
+    .modal {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: grid;
+      place-items: center;
+      padding: 22px;
+      background: rgba(24, 32, 25, .54);
+      backdrop-filter: blur(5px);
+    }
+    .modal-card {
+      position: relative;
+      width: min(560px, 100%);
+      max-height: min(90vh, 820px);
+      max-height: min(90dvh, 820px);
+      overflow-y: auto;
+      padding: 34px 36px 30px;
+      border: 1px solid var(--line-strong);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.34), transparent 48%),
+        var(--paper);
+      box-shadow: 0 30px 90px rgba(17, 24, 18, .34);
+      animation: modalIn .35s both cubic-bezier(.2,.75,.25,1);
+      scrollbar-width: thin;
+    }
+    .modal-card::before {
+      content: "";
+      position: absolute;
+      inset: 7px;
+      border: 1px solid rgba(153,143,120,.36);
+      pointer-events: none;
+    }
+    .modal-close {
+      position: absolute;
+      z-index: 2;
+      top: 13px;
+      right: 13px;
+      width: 28px;
+      height: 28px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-size: 20px;
+      line-height: 1;
+      cursor: pointer;
+    }
+    .modal-close:hover { color: var(--clay-deep); }
+    .modal h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 37px;
+      font-weight: 600;
+      font-variation-settings: "opsz" 60;
+      letter-spacing: -.045em;
+      line-height: 1;
+    }
+    .modal-lede {
+      margin: 12px 0 22px;
+      max-width: 46ch;
+      color: var(--ink-soft);
+      font-size: 12.5px;
+      line-height: 1.62;
+    }
+    .field { margin: 0 0 14px; }
+    .field label,
+    .field-label {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      color: var(--forest);
+      font-family: var(--cond);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .field-label span { color: var(--muted); font-weight: 400; letter-spacing: .04em; text-transform: none; }
+    .field input,
+    .field select {
+      width: 100%;
+      min-height: 41px;
+      padding: 9px 11px;
+      border: 1px solid var(--line-strong);
+      border-radius: 1px;
+      color: var(--ink);
+      background: rgba(255, 252, 244, .72);
+      font-family: var(--sans);
+      font-size: 12px;
+      outline: 0;
+      transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+    }
+    .field input:focus,
+    .field select:focus {
+      border-color: var(--forest);
+      background: var(--paper-light);
+      box-shadow: 0 0 0 3px rgba(47,74,56,.09);
+    }
+    .field input::placeholder { color: #9b9a88; }
+    .field-help { margin: 5px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.45; }
+    .form-error {
+      margin: 10px 0 0;
+      padding: 8px 10px;
+      border-left: 2px solid var(--clay);
+      color: var(--clay-deep);
+      background: rgba(156,95,62,.07);
+      font-size: 10.5px;
+      line-height: 1.45;
+    }
+    .access-actions { display: flex; align-items: center; gap: 10px; margin-top: 16px; }
+    .access-actions .btn { flex: 1; min-height: 43px; }
+    .access-foot {
+      margin: 17px 0 0;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 9.5px;
+      line-height: 1.55;
+    }
+    .access-foot p { margin: 0 0 4px; }
+
+    .advanced {
+      margin: 4px 0 5px;
+      border-top: 1px solid rgba(153,143,120,.32);
+      border-bottom: 1px solid rgba(153,143,120,.32);
+    }
+    .advanced summary {
+      padding: 11px 0;
+      color: var(--forest);
+      font-family: var(--cond);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      cursor: pointer;
+      list-style: none;
+    }
+    .advanced summary::-webkit-details-marker { display: none; }
+    .advanced summary::after { content: "+"; float: right; font-family: var(--sans); font-size: 15px; font-weight: 400; line-height: 1; }
+    .advanced[open] summary::after { content: "−"; }
+    .advanced-body { padding: 0 0 8px; }
+    .recipe {
+      margin: 9px 0 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: recipe;
+      color: var(--ink-soft);
+      font-size: 10.5px;
+      line-height: 1.55;
+    }
+    .recipe li {
+      position: relative;
+      margin: 0 0 9px;
+      padding-left: 25px;
+      counter-increment: recipe;
+    }
+    .recipe li::before {
+      content: counter(recipe, decimal-leading-zero);
+      position: absolute;
+      top: 1px;
+      left: 0;
+      color: var(--clay);
+      font-family: var(--cond);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: .08em;
+    }
+    .recipe strong { color: var(--forest); font-weight: 600; }
+    .swatch-line { display: inline-flex; gap: 3px; vertical-align: -2px; margin-inline: 2px; }
+    .swatch-line i { width: 12px; height: 12px; border: 1px solid rgba(0,0,0,.1); border-radius: 50%; display: inline-block; }
+
+    .drawer {
+      position: fixed;
+      inset: 0;
+      z-index: 90;
+    }
+    .drawer-scrim {
+      position: absolute;
+      inset: 0;
+      background: rgba(24, 32, 25, .4);
+      backdrop-filter: blur(2px);
+      animation: fadeIn .22s both;
+    }
+    .drawer-panel {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: min(430px, calc(100% - 28px));
+      height: 100%;
+      overflow-y: auto;
+      padding: 29px 30px 30px;
+      border-left: 1px solid var(--line-strong);
+      background:
+        linear-gradient(135deg, rgba(255,255,255,.32), transparent 48%),
+        var(--paper);
+      box-shadow: -20px 0 60px rgba(20, 27, 21, .24);
+      animation: drawerIn .3s both cubic-bezier(.2,.75,.25,1);
+      scrollbar-width: thin;
+    }
+    .drawer-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 16px;
+      border-bottom: 3px double var(--line-strong);
+    }
+    .drawer-head h2 {
+      margin: 0;
+      font-family: var(--serif);
+      font-size: 30px;
+      font-weight: 500;
+      letter-spacing: -.035em;
+      line-height: 1;
+    }
+    .drawer-head .icon-btn { margin-top: -3px; }
+    .drawer-section {
+      margin: 21px 0 0;
+      padding: 0;
+      border: 0;
+    }
+    .drawer-section legend {
+      width: 100%;
+      margin-bottom: 11px;
+      padding: 0;
+      color: var(--forest);
+      font-family: var(--cond);
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+    }
+    .drawer-section + .drawer-section { border-top: 1px solid var(--line); padding-top: 17px; }
+    .range-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 0 0 7px;
+      color: var(--ink-soft);
+      font-size: 11px;
+    }
+    .range-output {
+      color: var(--clay-deep);
+      font-family: var(--cond);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .06em;
+    }
+    input[type="range"] {
+      width: 100%;
+      height: 20px;
+      margin: 0 0 11px;
+      accent-color: var(--forest);
+      cursor: pointer;
+    }
+    .drawer-actions { display: flex; gap: 8px; margin-top: 18px; }
+    .drawer-actions .btn { flex: 1; }
+    .drawer-note { margin: 12px 0 0; color: var(--muted); font-size: 9.5px; line-height: 1.55; }
+    .drawer hr { margin: 20px 0 0; border: 0; border-top: 1px solid var(--line); }
+
+    /* ================================================================
+       12. ANIMATIONS
+       ================================================================ */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes fountainPulse {
+      0% { transform: scale(.72); opacity: .7; }
+      70%, 100% { transform: scale(1.7); opacity: 0; }
+    }
+    @keyframes compassBreathe {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.035); }
+    }
+    @keyframes plateIn {
+      from { opacity: 0; transform: translateY(-7px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes popIn {
+      from { opacity: 0; transform: translateY(5px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes modalIn {
+      from { opacity: 0; transform: translateY(12px) scale(.99); }
+      to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes drawerIn {
+      from { transform: translateX(24px); opacity: .92; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* ================================================================
+       13. RESPONSIVE
+       ================================================================ */
+    @media (max-width: 1180px) {
+      :root { --sidebar-width: 382px; }
+      .sidebar-inner { padding-inline: 26px 22px 28px 30px; }
+      .section-head h2 { font-size: 16.5px; }
+    }
+    @media (max-width: 980px) {
+      :root { --sidebar-width: 352px; }
+      .sidebar-inner { padding: 22px 20px 26px 26px; }
+      .masthead { grid-template-columns: 47px minmax(0,1fr) 30px; gap: 10px; }
+      .seal { width: 47px; height: 47px; }
+      .seal svg { width: 27px; height: 27px; }
+      .masthead h1 { font-size: 26px; }
+      .stats-grid { box-shadow: none; }
+      .stat { padding-inline: 11px; }
+      .stat-value { font-size: 24px; }
+      .map-plate { width: min(280px, calc(100% - 100px)); }
+    }
+    @media (max-width: 820px) {
+      body { overflow: hidden; }
+      .app { display: block; }
+      .sidebar {
+        position: fixed;
+        z-index: 40;
+        left: 10px;
+        right: 10px;
+        bottom: max(10px, env(safe-area-inset-bottom));
+        height: min(68vh, 640px);
+        height: min(68dvh, 640px);
+        border: 1px solid var(--line-strong);
+        border-top: 1px solid rgba(153,143,120,.68);
+        border-radius: 14px 14px 8px 8px;
+        box-shadow: 0 -16px 46px rgba(35, 42, 32, .24);
+        transform: translateY(calc(100% - 103px));
+        transition: transform .38s cubic-bezier(.2,.75,.25,1);
+      }
+      .sidebar.is-open { transform: translateY(0); }
+      .sidebar::after { display: none; }
+      .sidebar-scroll { border-radius: inherit; }
+      .sidebar-inner { padding: 12px 20px max(26px, env(safe-area-inset-bottom)) 24px; }
+      .sheet-handle { display: flex; }
+      .masthead { grid-template-columns: 43px minmax(0,1fr) 30px; padding-top: 2px; padding-bottom: 14px; }
+      .seal { width: 43px; height: 43px; }
+      .seal svg { width: 25px; height: 25px; }
+      .masthead h1 { font-size: 25px; }
+      .masthead-sub { display: none; }
+      .map-shell { height: 100vh; height: 100dvh; }
+      .map-plate { top: 14px; left: 14px; width: min(265px, calc(100% - 95px)); padding: 12px 14px 11px; }
+      .plate-title { font-size: 22px; }
+      .plate-property { font-size: 9px; }
+      .mapboxgl-ctrl-top-right { top: 14px; right: 14px; }
+      /* Keep Mapbox's required logo/attribution above the closed field-notes
+         sheet, with our own tools and legend above them. */
+      .mapboxgl-ctrl-bottom-left,
+      .mapboxgl-ctrl-bottom-right { bottom: 113px !important; }
+      .mapboxgl-ctrl-scale { display: none !important; }
+      .map-tools { right: 14px; bottom: calc(103px + 47px); gap: 5px; }
+      .map-tool { min-width: 0; width: 38px; height: 36px; padding: 0; justify-content: center; }
+      .map-tool span { display: none; }
+      .layers-panel { right: 14px; bottom: calc(103px + 47px + 130px); width: 205px; }
+      .map-legend { left: 14px; bottom: calc(103px + 47px); width: 188px; }
+      .toast { bottom: calc(103px + 48px); }
+      .modal { padding: 12px; align-items: center; }
+      .modal-card { padding: 27px 22px 24px; max-height: 92dvh; }
+      .modal h2 { font-size: 30px; }
+      .modal-lede { margin-bottom: 17px; }
+      .drawer-panel {
+        width: calc(100% - 16px);
+        padding: 23px 21px 28px;
+        border-radius: 10px 0 0 10px;
+      }
+    }
+    @media (max-width: 520px) {
+      .map-plate { width: calc(100% - 84px); }
+      .plate-meta { gap: 4px; }
+      .plate-meta span:last-child { display: none; }
+      .map-legend { width: 166px; padding: 10px; }
+      .legend-keys { gap: 3px; }
+      .care-actions { grid-template-columns: 1fr; }
+      .intake-grid { gap: 8px; }
+      .dropzone { min-height: 116px; padding-inline: 10px; }
+      .drop-title { font-size: 13.5px; }
+      .drop-detail { font-size: 8.7px; }
+      .care-kicker { display: none; }
+      .toast { bottom: calc(103px + 48px); font-size: 10.5px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app" id="app">
+    <!-- ==============================================================
+         FIELD NOTES SIDEBAR
+         ============================================================== -->
+    <aside class="sidebar" id="sidebar" aria-label="Lake survey field notes">
+      <div class="sidebar-scroll">
+        <button class="sheet-handle" id="sheetToggle" type="button" aria-expanded="false" aria-controls="sidebarPanel">
+          <span class="sheet-grip" aria-hidden="true"></span>
+          <span id="sheetLabel">Open field notes</span>
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 9.5 8 5l4.5 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+
+        <div class="sidebar-inner" id="sidebarPanel">
+          <header class="masthead">
+            <div class="seal" aria-hidden="true">
+              <svg viewBox="0 0 64 64" fill="none">
+                <circle cx="32" cy="32" r="24" stroke="currentColor" stroke-width="1"/>
+                <path d="M32 5v6M32 53v6M5 32h6M53 32h6" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+                <path d="m32 16 4.2 12.6L32 48l-4.2-19.4L32 16Z" fill="currentColor" opacity=".9"/>
+                <circle cx="32" cy="32" r="2" fill="#f2ecdc" stroke="currentColor" stroke-width="1"/>
+              </svg>
+            </div>
+            <div>
+              <p class="eyebrow">National Lakes Survey</p>
+              <h1>The Lake Atlas</h1>
+              <p class="masthead-sub">Bathymetry &amp; stewardship</p>
+            </div>
+            <button class="icon-btn" id="settingsBtn" type="button" aria-label="Open map and survey settings" title="Settings">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M12 8.4a3.6 3.6 0 1 0 0 7.2 3.6 3.6 0 0 0 0-7.2Z" stroke="currentColor" stroke-width="1.35"/>
+                <path d="M19 13.3v-2.6l-2-.6a7.2 7.2 0 0 0-.8-1.9l1-1.8-1.9-1.9-1.8 1a7.2 7.2 0 0 0-1.9-.8L11.3 3H8.7l-.6 2a7.2 7.2 0 0 0-1.9.8l-1.8-1L2.5 6.7l1 1.8a7.2 7.2 0 0 0-.8 1.9l-2 .6v2.6l2 .6c.2.7.5 1.3.8 1.9l-1 1.8 1.9 1.9 1.8-1c.6.4 1.2.6 1.9.8l.6 2h2.6l.6-2c.7-.2 1.3-.5 1.9-.8l1.8 1 1.9-1.9-1-1.8c.4-.6.6-1.2.8-1.9l2-.6Z" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round" transform="translate(2 2) scale(.83)"/>
+              </svg>
+            </button>
+          </header>
+
+          <div class="survey-strip">
+            <span class="survey-status"><span class="status-dot" id="statusDot" aria-hidden="true"></span><span id="surveyState">Awaiting survey</span></span>
+            <span id="surveyNo">No. —</span>
+          </div>
+
+          <!-- 01 · DATA INTAKE -->
+          <section aria-labelledby="intakeHeading">
+            <div class="section-head">
+              <span class="section-num">01</span>
+              <h2 id="intakeHeading">Survey intake</h2>
+              <span class="section-note">Deeper Pro 2</span>
+            </div>
+
+            <div class="intake-grid">
+              <button class="dropzone" id="csvDrop" type="button" aria-describedby="csvDetail">
+                <span class="drop-top">
+                  <span class="drop-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="M12 16V4m0 0 4 4m-4-4L8 8" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 14v4.2c0 .99.8 1.8 1.8 1.8h10.4c1 0 1.8-.81 1.8-1.8V14" stroke="currentColor" stroke-width="1.35" stroke-linecap="round"/></svg>
+                  </span>
+                  <span class="drop-badge" id="csvBadge">CSV</span>
+                </span>
+                <span class="drop-title">Sonar soundings</span>
+                <span class="drop-detail" id="csvDetail">lat · lon · depth · fish</span>
+                <span class="drop-file" id="csvFile">Choose CSV</span>
+              </button>
+
+              <button class="dropzone" id="geoDrop" type="button" aria-describedby="geoDetail">
+                <span class="drop-top">
+                  <span class="drop-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="none"><path d="m12 3 7 3.2v6.2c0 4.3-2.9 7.3-7 8.6-4.1-1.3-7-4.3-7-8.6V6.2L12 3Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="m9.2 12.1 1.8-1.7 1.4 1.5 2.4-2.3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </span>
+                  <span class="drop-badge" id="geoBadge">GEOJSON</span>
+                </span>
+                <span class="drop-title">Parcel boundary</span>
+                <span class="drop-detail" id="geoDetail">Property polygon</span>
+                <span class="drop-file" id="geoFile">Choose GeoJSON</span>
+              </button>
+            </div>
+
+            <div class="intake-actions">
+              <button class="btn btn-quiet" id="demoBtn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17h10a4 4 0 0 0 .7-7.94A6 6 0 0 0 6.2 8.1 4.5 4.5 0 0 0 7 17Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 11.4 8 13m6-1.6 1 1.6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+                Load sample
+              </button>
+              <button class="btn btn-quiet" id="clearBtn" type="button" disabled>Clear survey</button>
+            </div>
+            <p class="data-status" id="dataStatus" aria-live="polite">CSV columns auto-detected. Depths default to metres unless the file says otherwise.</p>
+            <input id="csvInput" type="file" accept=".csv,.txt,text/csv,text/plain" hidden>
+            <input id="geoInput" type="file" accept=".geojson,.json,application/geo+json,application/json" hidden>
+          </section>
+
+          <!-- 02 · MEASUREMENTS -->
+          <section aria-labelledby="statsHeading">
+            <div class="section-head">
+              <span class="section-num">02</span>
+              <h2 id="statsHeading">Lake measurements</h2>
+              <span class="section-note">Live</span>
+            </div>
+
+            <div class="stats-grid">
+              <article class="stat">
+                <p class="stat-label">Lake surface</p>
+                <p class="stat-value"><span id="statArea">—</span><span class="unit">ac</span></p>
+                <p class="stat-foot" id="statAreaFoot">Hull area from soundings</p>
+              </article>
+              <article class="stat">
+                <p class="stat-label">Maximum depth</p>
+                <p class="stat-value"><span id="statMax">—</span><span class="unit">m</span></p>
+                <p class="stat-foot" id="statMaxFoot">Deepest sonar return</p>
+              </article>
+              <article class="stat">
+                <p class="stat-label">Mean depth</p>
+                <p class="stat-value"><span id="statMean">—</span><span class="unit">m</span></p>
+                <p class="stat-foot" id="statMeanFoot">Interpolated lake surface</p>
+              </article>
+              <article class="stat">
+                <p class="stat-label">Fish contacts</p>
+                <p class="stat-value"><span id="statFish">—</span><span class="unit" id="statFishUnit"></span></p>
+                <p class="stat-foot" id="statFishFoot">Returns flagged by sonar</p>
+              </article>
+            </div>
+
+            <ul class="measurements">
+              <li id="measureShore">Shoreline —</li>
+              <li id="measureSoundings">0 soundings</li>
+              <li id="measureParcel">No parcel</li>
+            </ul>
+          </section>
+
+          <!-- 03 · CARE NOTES -->
+          <section aria-labelledby="careHeading">
+            <div class="section-head">
+              <span class="section-num">03</span>
+              <h2 id="careHeading">Lake care &amp; ecology</h2>
+              <span class="section-note">AI-ready</span>
+            </div>
+            <p class="care-intro">Site notes for <strong id="careSubject">this survey</strong>. Each field is editable; inject generated text with <strong>Copy AI brief</strong> or <code style="font-size:10px;font-family:ui-monospace,Consolas,monospace;">LakeAtlas.setNarrative()</code>.</p>
+
+            <div class="care-list">
+              <article class="care-card is-open" data-care="fish">
+                <button class="care-toggle" type="button" aria-expanded="true" aria-controls="careFishBody">
+                  <span class="care-num">A</span>
+                  <span class="care-title">Fish Management</span>
+                  <span class="care-kicker">Habitat &amp; pressure</span>
+                  <svg class="care-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3.5 6 4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="care-body" id="careFishBody">
+                  <div class="care-body-inner">
+                    <div class="narrative is-empty" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Fish management narrative" data-key="fish" data-placeholder="Awaiting a fisheries note. Add species observations, survey gaps, and recommended management actions." spellcheck="true"></div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="care-card is-open" data-care="aeration">
+                <button class="care-toggle" type="button" aria-expanded="true" aria-controls="careAerationBody">
+                  <span class="care-num">B</span>
+                  <span class="care-title">Aeration Benefits</span>
+                  <span class="care-kicker">Fountain siting</span>
+                  <svg class="care-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3.5 6 4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="care-body" id="careAerationBody">
+                  <div class="care-body-inner">
+                    <div class="narrative is-empty" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Aeration benefits narrative" data-key="aeration" data-placeholder="Awaiting an aeration note. Explain why the deepest basin was selected and what water-quality outcomes to expect." spellcheck="true"></div>
+                  </div>
+                </div>
+              </article>
+
+              <article class="care-card is-open" data-care="herbs">
+                <button class="care-toggle" type="button" aria-expanded="true" aria-controls="careHerbsBody">
+                  <span class="care-num">C</span>
+                  <span class="care-title">Herb Cultivation</span>
+                  <span class="care-kicker">Shoreline buffer</span>
+                  <svg class="care-chevron" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="m3.5 6 4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <div class="care-body" id="careHerbsBody">
+                  <div class="care-body-inner">
+                    <div class="narrative is-empty" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Herb cultivation narrative" data-key="herbs" data-placeholder="Awaiting a planting note. Describe the 5 m upland buffer, suitable medicinal species, and stewardship considerations." spellcheck="true"></div>
+                  </div>
+                </div>
+              </article>
+            </div>
+
+            <div class="care-actions">
+              <button class="btn btn-primary" id="briefBtn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 4h8m-8 0H6.8C5.8 4 5 4.8 5 5.8v13.4c0 1 .8 1.8 1.8 1.8h10.4c1 0 1.8-.8 1.8-1.8V5.8c0-1-.8-1.8-1.8-1.8H16M8 4v2h8V4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M8.5 11h7M8.5 14.5h5" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/></svg>
+                Copy AI brief
+              </button>
+              <button class="btn btn-outline" id="exportBtn" type="button">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 4v11m0 0 4-4m-4 4-4-4M5 19h14" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                GeoJSON
+              </button>
+            </div>
+            <p class="api-hint">Developer hook: <code>LakeAtlas.setNarrative('fish', '…')</code> · <code>LakeAtlas.getSummary()</code></p>
+          </section>
+
+          <footer class="sidebar-footer">
+            <p><span class="footer-mark">Field Office · 2026</span></p>
+            <p>Bathymetry shown for stewardship planning. Not for navigation.</p>
+            <p>Base map © Mapbox · © OpenStreetMap contributors · Survey data remains in your browser.</p>
+          </footer>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ==============================================================
+         MAP
+         ============================================================== -->
+    <main class="map-shell" aria-label="Interactive bathymetric map">
+      <div id="map"></div>
+      <div class="map-wash" aria-hidden="true"></div>
+      <div class="map-grain" aria-hidden="true"></div>
+
+      <div class="map-loading" id="mapLoading">
+        <div class="loading-card">
+          <div class="loading-compass" aria-hidden="true">
+            <svg viewBox="0 0 64 64" fill="none">
+              <circle cx="32" cy="32" r="25" stroke="currentColor" stroke-width="1"/>
+              <path d="M32 6v5M32 53v5M6 32h5M53 32h5" stroke="currentColor" stroke-width="1" stroke-linecap="round"/>
+              <path d="m32 15 4.5 17L32 49l-4.5-17L32 15Z" fill="currentColor" opacity=".88"/>
+              <circle cx="32" cy="32" r="1.8" fill="#f2ecdc"/>
+            </svg>
+          </div>
+          <p class="loading-title">Preparing the atlas</p>
+          <p class="loading-sub">Soundings · shoreline · terrain</p>
+        </div>
+      </div>
+
+      <div class="map-locked" id="mapLocked" hidden>
+        <p class="eyebrow">Map access</p>
+        <h2>Connect your map</h2>
+        <p>Add a public Mapbox token to render the park-style base map, 3D terrain, and survey layers.</p>
+        <button class="btn btn-primary" id="mapLockedBtn" type="button">Add Mapbox token</button>
+      </div>
+
+      <div class="map-plate" id="mapPlate">
+        <p class="plate-kicker">Bathymetric survey <span class="sample-tag" id="sampleTag" hidden>Sample</span></p>
+        <h2 class="plate-title" id="lakeName">Uncharted waters</h2>
+        <p class="plate-property" id="propertyName">Upload a sonar track to begin</p>
+        <div class="plate-rule"></div>
+        <div class="plate-meta">
+          <span id="plateCoords">Coordinates pending</span>
+          <span id="plateSoundings">0 soundings</span>
+        </div>
+      </div>
+
+      <div class="map-legend" id="mapLegend" hidden>
+        <div class="legend-title"><span>Depth below surface</span><span id="legendAria">0–0 m</span></div>
+        <div class="depth-gradient" role="img" aria-label="Depth color ramp from shallow pale sage to deep dark teal"></div>
+        <div class="depth-ticks"><span>0 m</span><span id="legendMid">—</span><span id="legendMax">—</span></div>
+        <ul class="legend-keys">
+          <li><span class="legend-key herb"></span>Medicinal herb buffer</li>
+          <li><span class="legend-key fountain"></span>Aeration fountain</li>
+          <li><span class="legend-key fish"></span>Fish contact</li>
+          <li><span class="legend-key parcel"></span>Property boundary</li>
+        </ul>
+      </div>
+
+      <div class="map-tools" aria-label="Map tools">
+        <button class="map-tool" id="layersBtn" type="button" aria-expanded="false" aria-controls="layersPanel">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m12 4 8 4.5-8 4.5-8-4.5L12 4Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="m4 12 8 4.5 8-4.5M4 15.5l8 4.5 8-4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Layers</span>
+        </button>
+        <button class="map-tool is-active" id="terrainBtn" type="button" aria-pressed="true">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m3 17 5.2-8 3.4 5 2.2-3.2L21 17H3Z" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/><path d="m7 9 1.2-1.8L9.4 9" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>3D</span>
+        </button>
+        <button class="map-tool" id="recenterBtn" type="button">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="6.5" stroke="currentColor" stroke-width="1.3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></svg>
+          <span>Fit</span>
+        </button>
+      </div>
+
+      <div class="layers-panel" id="layersPanel" hidden>
+        <p class="layers-title">Map layers</p>
+        <label class="layer-row"><input type="checkbox" data-layer-toggle="depth" checked><span>Depth relief</span><span class="layer-swatch depth"></span></label>
+        <label class="layer-row"><input type="checkbox" data-layer-toggle="herbs" checked><span>Herb buffer</span><span class="layer-swatch herbs"></span></label>
+        <label class="layer-row"><input type="checkbox" data-layer-toggle="fish" checked><span>Fish contacts</span><span class="layer-swatch fish"></span></label>
+        <label class="layer-row"><input type="checkbox" data-layer-toggle="property" checked><span>Parcel line</span><span class="layer-swatch property"></span></label>
+      </div>
+
+      <div class="toast" id="toast" role="status" aria-live="polite">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m5 12.5 4.2 4.2L19 6.9" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="toastText"></span>
+      </div>
+    </main>
+  </div>
+
+  <!-- ================================================================
+       ACCESS DIALOG
+       ================================================================ -->
+  <div class="modal" id="accessModal" role="dialog" aria-modal="true" aria-labelledby="accessTitle" hidden>
+    <div class="modal-card">
+      <button class="modal-close" id="accessClose" type="button" aria-label="Close access dialog">×</button>
+      <p class="eyebrow">Field access</p>
+      <h2 id="accessTitle">Open the atlas</h2>
+      <p class="modal-lede">Connect a Mapbox account to drape your soundings over 3D terrain. The public token stays in this browser; no sonar data leaves the page.</p>
+
+      <form id="accessForm" novalidate>
+        <div class="field">
+          <label for="accessToken">Mapbox public token <span>Starts with pk.</span></label>
+          <input id="accessToken" name="token" type="text" autocomplete="off" spellcheck="false" placeholder="pk.eyJ1Ijo…">
+          <p class="field-help">Create one at <a href="https://account.mapbox.com/access-tokens/" target="_blank" rel="noopener noreferrer">account.mapbox.com</a>. Restrict it to your deployment URL and grant <em>styles:read</em>, <em>fonts:read</em>, and <em>vision:read</em>.</p>
+        </div>
+
+        <details class="advanced">
+          <summary>Custom park style URL</summary>
+          <div class="advanced-body">
+            <div class="field" style="margin-top:8px;">
+              <label for="accessStyle">Mapbox style URL <span>Optional</span></label>
+              <input id="accessStyle" name="style" type="text" autocomplete="off" spellcheck="false" placeholder="mapbox://styles/you/style-id">
+              <p class="field-help">Leave blank for Mapbox Outdoors. The in-app settings drawer includes the full vintage-park Studio recipe.</p>
+            </div>
+          </div>
+        </details>
+
+        <p class="form-error" id="accessError" role="alert" hidden></p>
+
+        <div class="access-actions">
+          <button class="btn btn-primary" id="accessSubmit" type="submit">Enter the atlas</button>
+        </div>
+      </form>
+
+      <div class="access-foot">
+        <p><strong>Studio recipe:</strong> start from Outdoors → recolor land <span class="swatch-line"><i style="background:#e7dfcb"></i></span>, water <span class="swatch-line"><i style="background:#9fb7aa"></i></span>, parks <span class="swatch-line"><i style="background:#c9c39e"></i></span> → keep contours and hillshade → publish and paste the <code>mapbox://styles/…</code> URL above.</p>
+        <p>This is a private browser-side tool. Review Mapbox's usage terms for client deployments.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================================================================
+       SETTINGS DRAWER
+       ================================================================ -->
+  <div class="drawer" id="settingsDrawer" hidden>
+    <div class="drawer-scrim" id="settingsScrim"></div>
+    <section class="drawer-panel" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <header class="drawer-head">
+        <div>
+          <p class="eyebrow">Atlas settings</p>
+          <h2 id="settingsTitle">Map &amp; survey</h2>
+        </div>
+        <button class="icon-btn" id="settingsClose" type="button" aria-label="Close settings">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+
+      <fieldset class="drawer-section">
+        <legend>Map access</legend>
+        <div class="field">
+          <label for="settingsToken">Mapbox public token</label>
+          <input id="settingsToken" type="text" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="field">
+          <label for="settingsStyle">Style URL</label>
+          <input id="settingsStyle" type="text" autocomplete="off" spellcheck="false">
+          <p class="field-help">Mapbox Outdoors is the default. Use a Studio style URL for the full vintage park treatment.</p>
+        </div>
+        <button class="btn btn-outline" id="reconnectBtn" type="button">Reconnect map</button>
+      </fieldset>
+
+      <fieldset class="drawer-section">
+        <legend>Survey rendering</legend>
+
+        <div class="range-row"><label for="terrainRange">Terrain relief</label><output class="range-output" id="terrainOutput" for="terrainRange">1.3×</output></div>
+        <input id="terrainRange" type="range" min="0.5" max="2.5" step="0.1" value="1.3">
+
+        <div class="range-row"><label for="bufferRange">Herb buffer</label><output class="range-output" id="bufferOutput" for="bufferRange">5 m</output></div>
+        <input id="bufferRange" type="range" min="2" max="30" step="1" value="5">
+        <p class="field-help" style="margin-top:-5px;">The planting ring is generated outside the concave lake hull. Adjust in metre increments; 5 m is the survey default.</p>
+
+        <div class="field" style="margin-top:15px;">
+          <label for="unitSelect">Sonar depth units <span>Auto reads column labels</span></label>
+          <select id="unitSelect">
+            <option value="auto">Auto-detect</option>
+            <option value="m">Metres</option>
+            <option value="ft">Feet</option>
+          </select>
+        </div>
+        <p class="drawer-note">Changing units or buffer distance reruns the local spatial analysis. Uploaded files remain on this device.</p>
+      </fieldset>
+
+      <details class="advanced" style="margin-top:18px;">
+        <summary>Vintage park style recipe</summary>
+        <div class="advanced-body">
+          <ol class="recipe">
+            <li><strong>Start from Outdoors.</strong> In <a href="https://studio.mapbox.com/" target="_blank" rel="noopener noreferrer">Mapbox Studio</a>, create a new style from <em>Outdoors</em>.</li>
+            <li><strong>Recolor the paper.</strong> Land <span class="swatch-line"><i style="background:#e7dfcb"></i></span> <code>#E7DFCB</code>, water <span class="swatch-line"><i style="background:#9fb7aa"></i></span> <code>#9FB7AA</code>, parks <span class="swatch-line"><i style="background:#c9c39e"></i></span> <code>#C9C39E</code>, roads <code>#B8A78A</code>, labels <code>#2C352C</code>.</li>
+            <li><strong>Keep the relief.</strong> Retain contour and hillshade layers. Warm the hillshade shadow to <code>#6B5D45</code> and lower its opacity to about 18%.</li>
+            <li><strong>Publish and copy.</strong> Use <em>Share → Style URL</em>, paste the <code>mapbox://styles/…</code> value here, then <em>Reconnect map</em>.</li>
+          </ol>
+          <p class="drawer-note">The app adds its own paper wash, cream control chrome, terrain source, and analysis layers. Your Studio style supplies the land, water, roads, labels, and topographic linework.</p>
+        </div>
+      </details>
+
+      <div class="drawer-actions">
+        <button class="btn btn-primary" id="settingsDone" type="button">Done</button>
+      </div>
+      <p class="drawer-note">Aeration siting uses the single deepest sounding. The herb buffer is a Turf.js ring; it is a planning overlay, not a legal setback. Field-verify utilities and permit requirements before planting or installing equipment.</p>
+    </section>
+  </div>
+
+  <noscript>
+    <div style="position:fixed;inset:0;z-index:200;display:grid;place-items:center;padding:24px;background:#f2ecdc;color:#243027;font-family:Georgia,serif;text-align:center;">
+      <div><h1>The Lake Atlas needs JavaScript.</h1><p>Please enable JavaScript to parse sonar data and render the interactive map.</p></div>
+    </div>
+  </noscript>
+
+  <script>
+  /* ==================================================================
+     THE LAKE ATLAS
+     A single-file browser GIS for Deeper Pro 2 bathymetry.
+
+     QUICK CONFIGURATION
+     -------------------
+     1. Mapbox token
+        Paste a public token (starts with "pk.") into the welcome dialog,
+        or pass ?token=pk... in the URL. Tokens are saved in localStorage.
+        Create/restrict one at https://account.mapbox.com/access-tokens/.
+        For production, restrict the token by URL and use only the scopes
+        styles:read, fonts:read, vision:read, and styles:tiles.
+
+     2. Custom vintage style
+        Paste a Studio style URL (mapbox://styles/<user>/<id>) into the
+        settings drawer. The included recipe starts from Outdoors and
+        recolors land/water/roads to a warm park palette. See the drawer.
+
+     3. Data contract
+        CSV: lat, lon, depth, fish (optional). Column names are aliased
+        below — edit FIELD_ALIASES if your Deeper export uses different
+        headers. Depths may be metres or feet; auto-detection uses the
+        column label, and the settings drawer can override it.
+
+        GeoJSON: a Feature, FeatureCollection, Polygon, or MultiPolygon.
+        Polygons are used as the property boundary. Extra properties are
+        preserved; common owner/parcel/name fields are surfaced in the UI.
+
+     4. Spatial defaults
+        - Herb buffer: CONFIG.defaultBufferMeters = 5 (change here or in
+          the settings drawer; units are metres).
+        - Concave hull: Turf.js `concave`, with an adaptive maxEdge based
+          on median nearest-neighbour spacing. It falls back to a convex
+          hull if a connected shoreline cannot be built.
+        - Interpolation: inverse-distance weighting (IDW) on a local
+          metric grid, clipped by the lake hull. See CONFIG and the
+          `buildDepthGrid` comment for the full method.
+
+     5. Narrative injection
+        window.LakeAtlas.setNarrative('fish' | 'aeration' | 'herbs', text)
+        window.LakeAtlas.getSummary()
+        The "Copy AI brief" button creates a self-contained prompt with
+        current measurements for an LLM.
+     ================================================================== */
+  (() => {
+    'use strict';
+
+    // ---------------- Configuration ----------------
+    const CONFIG = {
+      defaultToken: '',
+      defaultStyle: 'mapbox://styles/mapbox/outdoors-v12',
+      defaultBufferMeters: 5,
+      defaultTerrain: 1.35,
+      gridLongSide: 148,       // interpolation cells along the long axis
+      maxGridCells: 26000,     // safety cap for unusually long properties
+      idwPower: 2.25,          // higher = more local; lower = smoother
+      idwNeighbours: 12,       // nearest soundings used for each raster cell
+      contourTarget: 5,        // target number of depth lines
+      minDepth: 0.05,
+      maxFishMarkers: 1200,
+      localStorageKeys: {
+        token: 'lake-atlas.token.v1',
+        style: 'lake-atlas.style.v1',
+        settings: 'lake-atlas.settings.v1'
+      }
+    };
+
+    const FIELD_ALIASES = {
+      lat: ['lat', 'latitude', 'y', 'gps_lat', 'latitude_deg', 'lat_deg', 'latitude_dd', 'lat_dd'],
+      lon: ['lon', 'lng', 'long', 'longitude', 'x', 'gps_lon', 'gps_lng', 'longitude_deg', 'lon_deg', 'lng_deg', 'longitude_dd', 'lon_dd'],
+      depth: ['depth', 'depth_m', 'depthm', 'depth_meters', 'depth_metres', 'depth_ft', 'depthft', 'depth_feet', 'z', 'bathymetry', 'water_depth'],
+      fish: ['fish', 'fish_detected', 'fish_detection', 'fish_count', 'fishcount', 'fish_activity', 'fish_school', 'fish_returns', 'fish_targets']
+    };
+
+    const LAYER_IDS = {
+      parcelFill: 'atlas-parcel-fill',
+      parcelHalo: 'atlas-parcel-halo',
+      parcelLine: 'atlas-parcel-line',
+      lakeFill: 'atlas-lake-fill',
+      herbFill: 'atlas-herb-fill',
+      herbPattern: 'atlas-herb-pattern',
+      herbLine: 'atlas-herb-line',
+      bathymetry: 'atlas-bathymetry',
+      contourGlow: 'atlas-contour-glow',
+      contours: 'atlas-contours',
+      shorelineHalo: 'atlas-shoreline-halo',
+      shoreline: 'atlas-shoreline',
+      fish: 'atlas-fish'
+    };
+
+    const SOURCE_IDS = {
+      parcel: 'atlas-src-parcel',
+      hull: 'atlas-src-hull',
+      herb: 'atlas-src-herb',
+      bathymetry: 'atlas-src-bathymetry',
+      contours: 'atlas-src-contours',
+      fish: 'atlas-src-fish'
+    };
+
+    const DEPTH_RAMP = [
+      [0.00, [220, 231, 220]],  // pale sage shallows
+      [0.18, [174, 202, 185]],
+      [0.38, [127, 169, 155]],
+      [0.58, [81, 135, 127]],
+      [0.78, [45, 101, 99]],
+      [1.00, [23, 63, 64]]      // deep teal
+    ];
+
+    const CARE_KEYS = ['fish', 'aeration', 'herbs'];
+    const MOBILE_QUERY = window.matchMedia('(max-width: 820px)');
+
+    // ---------------- State ----------------
+    const state = {
+      map: null,
+      mapReady: false,
+      token: '',
+      styleUrl: CONFIG.defaultStyle,
+      settings: {
+        bufferMeters: CONFIG.defaultBufferMeters,
+        terrainExaggeration: CONFIG.defaultTerrain,
+        depthUnit: 'auto'
+      },
+      rawSonar: [],
+      sonar: [],
+      unitHint: 'm',
+      effectiveUnit: 'm',
+      sourceName: '',
+      sourceFileName: '',
+      parcel: null,
+      parcelName: '',
+      parcelFile: '',
+      hull: null,
+      herbZone: null,
+      deepest: null,
+      fishPoints: null,
+      grid: null,
+      contours: null,
+      raster: null,
+      stats: null,
+      narratives: { fish: '', aeration: '', herbs: '' },
+      isDemo: false,
+      warnings: [],
+      layers: { depth: true, herbs: true, fish: true, property: true, terrain: true },
+      layerIds: { depth: [], herbs: [], fish: [], property: [] },
+      marker: null,
+      demSourceId: null,
+      renderToken: 0,
+      hasBootedDemo: false,
+      userClearedDemo: false,
+      accessBusy: false,
+      toastTimer: null,
+      sessionLoaded: false
+    };
+
+    // ---------------- Small helpers ----------------
+    const $ = (id) => document.getElementById(id);
+    const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
+    const finite = (n) => Number.isFinite(n);
+    const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+    const escapeHtml = (value) => String(value).replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+
+    function readStore(key) {
+      try { return localStorage.getItem(key); } catch (_) { return null; }
+    }
+    function writeStore(key, value) {
+      try { localStorage.setItem(key, value); } catch (_) { /* private mode */ }
+    }
+    function readJSON(key, fallback) {
+      const raw = readStore(key);
+      if (!raw) return fallback;
+      try { return JSON.parse(raw); } catch (_) { return fallback; }
+    }
+    function writeJSON(key, value) {
+      try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) { /* private mode */ }
+    }
+
+    function formatNumber(n, digits = 1) {
+      if (!finite(n)) return '—';
+      if (Math.abs(n) >= 1000) return Math.round(n).toLocaleString('en-US');
+      if (Math.abs(n) >= 100) return n.toFixed(0);
+      return n.toFixed(digits);
+    }
+    function formatDepth(n) {
+      if (!finite(n)) return '—';
+      return n >= 10 ? n.toFixed(1) : n.toFixed(1);
+    }
+    function formatAcres(m2) {
+      if (!finite(m2)) return '—';
+      const acres = m2 / 4046.8564224;
+      if (acres >= 100) return Math.round(acres).toLocaleString('en-US');
+      if (acres >= 10) return acres.toFixed(1);
+      return acres.toFixed(2);
+    }
+    function formatMeters(m) {
+      if (!finite(m)) return '—';
+      if (m >= 1000) return (m / 1000).toFixed(2) + ' km';
+      return m.toFixed(0) + ' m';
+    }
+    function formatSqMeters(m2) {
+      if (!finite(m2)) return '—';
+      return Math.round(m2).toLocaleString('en-US') + ' m²';
+    }
+    function slugify(value) {
+      return String(value || 'lake-atlas')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 70) || 'lake-atlas';
+    }
+    function titleCase(value) {
+      return String(value || '').replace(/\b[a-z]/g, (c) => c.toUpperCase());
+    }
+    function debounce(fn, wait = 180) {
+      let timer;
+      return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), wait);
+      };
+    }
+    function safeCopyText(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text).then(() => true).catch(() => fallbackCopy(text));
+      }
+      return Promise.resolve(fallbackCopy(text));
+    }
+    function fallbackCopy(text) {
+      try {
+        const area = document.createElement('textarea');
+        area.value = text;
+        area.setAttribute('readonly', '');
+        area.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;';
+        document.body.appendChild(area);
+        area.select();
+        const ok = document.execCommand('copy');
+        area.remove();
+        return ok;
+      } catch (_) {
+        return false;
+      }
+    }
+    function showToast(message, kind = 'info') {
+      const toast = $('toast');
+      const text = $('toastText');
+      if (!toast || !text) return;
+      text.textContent = message;
+      toast.classList.toggle('is-error', kind === 'error');
+      toast.classList.add('is-visible');
+      clearTimeout(state.toastTimer);
+      state.toastTimer = setTimeout(() => toast.classList.remove('is-visible'), 3800);
+    }
+    function setDataStatus(message, kind = '') {
+      const el = $('dataStatus');
+      if (!el) return;
+      el.classList.toggle('is-error', kind === 'error');
+      el.classList.toggle('is-working', kind === 'working');
+      el.innerHTML = kind === 'working' ? `<span class="inline-spinner" aria-hidden="true"></span>${escapeHtml(message)}` : escapeHtml(message);
+    }
+    function setSurveyState(text, live = false) {
+      const el = $('surveyState');
+      const dot = $('statusDot');
+      if (el) el.textContent = text;
+      if (dot) dot.classList.toggle('is-live', live);
+    }
+    function setBusy(isBusy) {
+      document.body.classList.toggle('is-analyzing', isBusy);
+      $('csvDrop').disabled = isBusy;
+      $('geoDrop').disabled = isBusy;
+      $('demoBtn').disabled = isBusy;
+    }
+
+    // ==================================================================
+    // 1. APPLICATION BOOT / MAP ACCESS
+    // ==================================================================
+    function boot() {
+      hydrateSettings();
+      bindUI();
+      syncSettingsControls();
+      setNarrativesEmptyState();
+
+      if (MOBILE_QUERY.matches) $('sheetToggle').setAttribute('aria-expanded', 'false');
+
+      if (state.token) {
+        startAtlas({initial: true});
+      } else {
+        openAccessDialog();
+        $('mapLocked').hidden = false;
+      }
+    }
+
+    function hydrateSettings() {
+      const params = new URLSearchParams(window.location.search);
+      const storedSettings = readJSON(CONFIG.localStorageKeys.settings, {}) || {};
+      const savedToken = readStore(CONFIG.localStorageKeys.token) || '';
+      const savedStyle = readStore(CONFIG.localStorageKeys.style) || CONFIG.defaultStyle;
+
+      state.token = (params.get('token') || savedToken || CONFIG.defaultToken || '').trim();
+      state.styleUrl = (params.get('style') || savedStyle || CONFIG.defaultStyle).trim();
+      state.settings.bufferMeters = clamp(Number(storedSettings.bufferMeters) || CONFIG.defaultBufferMeters, 2, 30);
+      state.settings.terrainExaggeration = clamp(Number(storedSettings.terrainExaggeration) || CONFIG.defaultTerrain, 0.5, 2.5);
+      state.settings.depthUnit = ['auto', 'm', 'ft'].includes(storedSettings.depthUnit) ? storedSettings.depthUnit : 'auto';
+
+      $('accessToken').value = state.token;
+      $('accessStyle').value = state.styleUrl === CONFIG.defaultStyle ? '' : state.styleUrl;
+      $('settingsToken').value = state.token;
+      $('settingsStyle').value = state.styleUrl;
+
+      if (params.get('token')) {
+        try {
+          const url = new URL(window.location.href);
+          url.searchParams.delete('token');
+          window.history.replaceState({}, '', url);
+        } catch (_) { /* non-critical */ }
+      }
+    }
+
+    function persistSettings() {
+      writeStore(CONFIG.localStorageKeys.token, state.token);
+      writeStore(CONFIG.localStorageKeys.style, state.styleUrl || CONFIG.defaultStyle);
+      writeJSON(CONFIG.localStorageKeys.settings, state.settings);
+    }
+
+    function syncSettingsControls() {
+      $('settingsToken').value = state.token;
+      $('settingsStyle').value = state.styleUrl;
+      $('terrainRange').value = String(state.settings.terrainExaggeration);
+      $('bufferRange').value = String(state.settings.bufferMeters);
+      $('unitSelect').value = state.settings.depthUnit;
+      updateRangeOutputs();
+    }
+
+    function updateRangeOutputs() {
+      $('terrainOutput').textContent = `${Number(state.settings.terrainExaggeration).toFixed(1)}×`;
+      $('bufferOutput').textContent = `${Math.round(state.settings.bufferMeters)} m`;
+    }
+
+    function bindUI() {
+      // Access
+      $('accessForm').addEventListener('submit', handleAccessSubmit);
+      $('accessClose').addEventListener('click', () => {
+        if (state.accessBusy) return;
+        closeAccessDialog();
+        if (!state.mapReady) $('mapLocked').hidden = false;
+      });
+      $('mapLockedBtn').addEventListener('click', openAccessDialog);
+
+      // Files
+      $('csvDrop').addEventListener('click', () => $('csvInput').click());
+      $('geoDrop').addEventListener('click', () => $('geoInput').click());
+      $('csvInput').addEventListener('change', (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (file) handleCsvFile(file);
+        event.target.value = '';
+      });
+      $('geoInput').addEventListener('change', (event) => {
+        const file = event.target.files && event.target.files[0];
+        if (file) handleGeoJsonFile(file);
+        event.target.value = '';
+      });
+      bindDropTarget($('csvDrop'), 'csv');
+      bindDropTarget($('geoDrop'), 'geojson');
+      $('demoBtn').addEventListener('click', () => loadDemo({announce: true}));
+      $('clearBtn').addEventListener('click', clearAllData);
+
+      // Care notes
+      document.querySelectorAll('.care-card').forEach((card) => {
+        const body = card.querySelector('.care-body');
+        if (body) {
+          const open = card.classList.contains('is-open');
+          body.inert = !open;
+          body.setAttribute('aria-hidden', String(!open));
+        }
+      });
+      document.querySelectorAll('.care-toggle').forEach((button) => {
+        button.addEventListener('click', () => toggleCareCard(button.closest('.care-card')));
+      });
+      document.querySelectorAll('.narrative').forEach((note) => {
+        note.addEventListener('input', () => {
+          state.narratives[note.dataset.key] = note.textContent.replace(/ /g, ' ').trimStart();
+          updateNarrativeEmptyState(note);
+        });
+        note.addEventListener('paste', (event) => {
+          event.preventDefault();
+          const text = (event.clipboardData || window.clipboardData).getData('text/plain');
+          document.execCommand('insertText', false, text);
+        });
+        note.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') note.blur();
+        });
+      });
+      $('briefBtn').addEventListener('click', copyDataBrief);
+      $('exportBtn').addEventListener('click', exportAnalysisGeoJSON);
+
+      // Map tools
+      $('layersBtn').addEventListener('click', (event) => {
+        event.stopPropagation();
+        const panel = $('layersPanel');
+        const open = panel.hidden;
+        panel.hidden = !open;
+        $('layersBtn').setAttribute('aria-expanded', String(open));
+      });
+      $('layersPanel').addEventListener('click', (event) => event.stopPropagation());
+      document.querySelectorAll('[data-layer-toggle]').forEach((input) => {
+        input.addEventListener('change', () => setLayerGroupVisibility(input.dataset.layerToggle, input.checked));
+      });
+      $('terrainBtn').addEventListener('click', toggleTerrain);
+      $('recenterBtn').addEventListener('click', () => fitToData({ duration: 1100 }));
+
+      // Settings
+      $('settingsBtn').addEventListener('click', openSettingsDrawer);
+      $('settingsClose').addEventListener('click', closeSettingsDrawer);
+      $('settingsDone').addEventListener('click', closeSettingsDrawer);
+      $('settingsScrim').addEventListener('click', closeSettingsDrawer);
+      $('reconnectBtn').addEventListener('click', reconnectMap);
+      $('terrainRange').addEventListener('input', (event) => {
+        state.settings.terrainExaggeration = Number(event.target.value);
+        updateRangeOutputs();
+        applyTerrainSetting();
+        persistSettings();
+      });
+      $('bufferRange').addEventListener('input', (event) => {
+        state.settings.bufferMeters = Number(event.target.value);
+        updateRangeOutputs();
+      });
+      $('bufferRange').addEventListener('change', () => {
+        persistSettings();
+        if (state.hull) runAnalysis({ fit: false, reason: 'buffer' });
+      });
+      $('unitSelect').addEventListener('change', (event) => {
+        state.settings.depthUnit = event.target.value;
+        persistSettings();
+        if (state.rawSonar.length) {
+          applyDepthUnits();
+          updateIntakeUI();
+          if (state.mapReady) runAnalysis({ fit: false, reason: 'units' });
+          else updateStatsPlaceholder();
+        }
+      });
+
+      // Mobile sheet
+      $('sheetToggle').addEventListener('click', toggleMobileSheet);
+
+      // Dismissals
+      document.addEventListener('click', (event) => {
+        const panel = $('layersPanel');
+        if (!panel.hidden && !panel.contains(event.target) && !$('layersBtn').contains(event.target)) {
+          panel.hidden = true;
+          $('layersBtn').setAttribute('aria-expanded', 'false');
+        }
+      });
+      document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        if (!$('layersPanel').hidden) {
+          $('layersPanel').hidden = true;
+          $('layersBtn').setAttribute('aria-expanded', 'false');
+        } else if (!$('settingsDrawer').hidden) {
+          closeSettingsDrawer();
+        } else if (MOBILE_QUERY.matches && $('sidebar').classList.contains('is-open')) {
+          toggleMobileSheet(false);
+        }
+      });
+
+      MOBILE_QUERY.addEventListener?.('change', () => {
+        $('sidebar').classList.remove('is-open');
+        $('sheetToggle').setAttribute('aria-expanded', 'false');
+        requestAnimationFrame(() => {
+          if (!state.map) return;
+          state.map.resize();
+          // fitBounds padding is part of the camera. After crossing the
+          // layout breakpoint, refit so the lake is not left under the
+          // sidebar or off the narrow mobile viewport.
+          if (state.hull || state.parcel) fitToData({ duration: 0 });
+        });
+      });
+
+      updateIntakeUI();
+      updateNarrativeHints();
+    }
+
+    function bindDropTarget(element, kind) {
+      ['dragenter', 'dragover'].forEach((eventName) => {
+        element.addEventListener(eventName, (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!element.disabled) element.classList.add('is-dragging');
+        });
+      });
+      ['dragleave', 'dragend'].forEach((eventName) => {
+        element.addEventListener(eventName, () => element.classList.remove('is-dragging'));
+      });
+      element.addEventListener('drop', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        element.classList.remove('is-dragging');
+        if (element.disabled) return;
+        const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+        if (!file) return;
+        if (kind === 'csv') {
+          if (!/\.(csv|txt)$/i.test(file.name) && !/csv|text\/plain/i.test(file.type)) {
+            showToast('Please drop a CSV sonar file.', 'error');
+            return;
+          }
+          handleCsvFile(file);
+        } else {
+          if (!/\.(geojson|json)$/i.test(file.name) && !/json/i.test(file.type)) {
+            showToast('Please drop a GeoJSON boundary.', 'error');
+            return;
+          }
+          handleGeoJsonFile(file);
+        }
+      });
+    }
+
+    function openAccessDialog() {
+      $('accessModal').hidden = false;
+      $('accessToken').focus({ preventScroll: true });
+    }
+    function closeAccessDialog() {
+      $('accessModal').hidden = true;
+    }
+    function setAccessError(message) {
+      const el = $('accessError');
+      el.textContent = message;
+      el.hidden = !message;
+    }
+    function setAccessBusy(busy) {
+      state.accessBusy = busy;
+      const button = $('accessSubmit');
+      button.disabled = busy;
+      button.textContent = busy ? 'Preparing map…' : 'Enter the atlas';
+    }
+    function showMapAccessFailure(message) {
+      setAccessBusy(false);
+      setAccessError(message);
+      $('mapLocked').hidden = false;
+      $('accessModal').hidden = false;
+    }
+
+    async function handleAccessSubmit(event) {
+      event.preventDefault();
+      const token = $('accessToken').value.trim();
+      const style = $('accessStyle').value.trim() || CONFIG.defaultStyle;
+      if (!token) {
+        setAccessError('Add a Mapbox public token to continue.');
+        $('accessToken').focus();
+        return;
+      }
+      if (/^sk\./.test(token)) {
+        setAccessError('That is a secret token. Use a public token beginning with "pk." instead.');
+        return;
+      }
+      if (!/^[a-z]+\./i.test(token) && token.length < 20) {
+        setAccessError('That token does not look complete. Copy the full public token.');
+        return;
+      }
+      setAccessError('');
+      state.token = token;
+      state.styleUrl = style;
+      persistSettings();
+      setAccessBusy(true);
+      startAtlas({ initial: true });
+    }
+
+    function startAtlas({ initial = false } = {}) {
+      setAccessError('');
+      setAccessBusy(true);
+      $('mapLocked').hidden = true;
+      $('mapLoading').classList.remove('is-hidden');
+      initMap(initial);
+    }
+
+    function initMap(initial) {
+      if (!window.mapboxgl) {
+        showMapAccessFailure('Mapbox GL JS did not load. Check your connection and reload the page.');
+        return;
+      }
+      if (state.map) {
+        try { state.map.remove(); } catch (_) { /* already removed */ }
+        state.map = null;
+      }
+      state.mapReady = false;
+      state.demSourceId = null;
+      mapboxgl.accessToken = state.token;
+
+      let map;
+      try {
+        map = new mapboxgl.Map({
+          container: 'map',
+          style: state.styleUrl || CONFIG.defaultStyle,
+          center: [-68.2438, 44.3048],
+          zoom: 14.2,
+          pitch: 48,
+          bearing: -13,
+          maxPitch: 82,
+          antialias: true,
+          attributionControl: false,
+          fadeDuration: 120
+        });
+      } catch (error) {
+        showMapAccessFailure('The map could not start: ' + error.message);
+        return;
+      }
+
+      state.map = map;
+      map.addControl(new mapboxgl.NavigationControl({ showCompass: true, showZoom: true, visualizePitch: true }), 'top-right');
+      map.addControl(new mapboxgl.ScaleControl({ maxWidth: 110, unit: 'metric' }), 'bottom-left');
+      map.addControl(new mapboxgl.AttributionControl({ compact: true }), 'bottom-right');
+
+      map.on('load', () => onMapLoad(initial));
+      map.on('error', onMapError);
+      map.on('click', handleMapClick);
+      map.on('mousemove', handleMapMouseMove);
+
+      // If the style never resolves, avoid leaving the dialog in limbo.
+      window.setTimeout(() => {
+        if (!state.mapReady && state.map === map && state.accessBusy) {
+          showMapAccessFailure('The map is taking longer than expected. Confirm the token and style URL, then try again.');
+        }
+      }, 18000);
+    }
+
+    function onMapError(event) {
+      const error = event && event.error;
+      const status = error && error.status;
+      const message = String((error && error.message) || '');
+      if (!state.mapReady && (status === 401 || status === 403)) {
+        showMapAccessFailure('Mapbox rejected this token. Check its URL restrictions and token scopes.');
+      } else if (!state.mapReady && (status === 404 || status === 422) && /style/i.test(message)) {
+        showMapAccessFailure('The map style could not be found. Check the style URL, or leave it blank for Outdoors.');
+      } else if (error && !/AbortError|Failed to fetch|Load aborted/i.test(message)) {
+        console.warn('[Lake Atlas] Map error:', error);
+      }
+    }
+
+    function onMapLoad(initial) {
+      state.mapReady = true;
+      state.hasBootedDemo = state.hasBootedDemo || state.isDemo;
+      setAccessBusy(false);
+      closeAccessDialog();
+      $('mapLoading').classList.add('is-hidden');
+      $('mapLocked').hidden = true;
+
+      ensureTerrain();
+      ensurePatterns();
+      applyTerrainSetting();
+      configureAtmosphere();
+
+      if (state.rawSonar.length) {
+        runAnalysis({ fit: true, reason: 'map-load' });
+      } else if (state.parcel) {
+        renderMapLayers();
+        updateChrome();
+        fitToData({ duration: 800 });
+      } else if (!state.userClearedDemo) {
+        loadDemo({ announce: initial === true });
+      } else {
+        updateStatsPlaceholder();
+        renderMapLayers();
+      }
+
+      requestAnimationFrame(() => {
+        if (state.map) state.map.resize();
+      });
+    }
+
+    function configureAtmosphere() {
+      if (!state.map) return;
+      try {
+        state.map.setFog({
+          color: '#eee5d1',
+          'high-color': '#cbd6c8',
+          'horizon-blend': 0.09,
+          'space-color': '#dbe2d6',
+          'star-intensity': 0
+        });
+      } catch (_) { /* not supported by every style */ }
+    }
+
+    function ensureTerrain() {
+      const map = state.map;
+      if (!map) return;
+      const style = map.getStyle();
+      const sources = style.sources || {};
+      let demId = Object.keys(sources).find((id) => sources[id] && sources[id].type === 'raster-dem');
+
+      if (!demId) {
+        demId = 'atlas-dem';
+        try {
+          map.addSource(demId, {
+            type: 'raster-dem',
+            url: 'mapbox://mapbox.mapbox-terrain-dem-v1',
+            tileSize: 512,
+            maxzoom: 14
+          });
+        } catch (error) {
+          console.warn('[Lake Atlas] Terrain source could not be added:', error);
+          return;
+        }
+      }
+      state.demSourceId = demId;
+
+      const hasHillshade = (style.layers || []).some((layer) => layer.type === 'hillshade');
+      if (!hasHillshade) {
+        try {
+          map.addLayer({
+            id: 'atlas-hillshade',
+            type: 'hillshade',
+            source: demId,
+            paint: {
+              'hillshade-exaggeration': 0.22,
+              'hillshade-shadow-color': '#5e5842',
+              'hillshade-highlight-color': '#f6efdc',
+              'hillshade-accent-color': '#958e75'
+            }
+          }, firstSymbolLayerId());
+        } catch (error) {
+          console.warn('[Lake Atlas] Hillshade could not be added:', error);
+        }
+      }
+    }
+
+    function firstSymbolLayerId() {
+      if (!state.map) return undefined;
+      const style = state.map.getStyle();
+      const layers = (style && style.layers) || [];
+      const firstSymbol = layers.find((layer) => layer.type === 'symbol');
+      return firstSymbol ? firstSymbol.id : undefined;
+    }
+
+    function applyTerrainSetting() {
+      if (!state.map || !state.mapReady || !state.demSourceId) return;
+      try {
+        if (state.layers.terrain) {
+          state.map.setTerrain({ source: state.demSourceId, exaggeration: state.settings.terrainExaggeration });
+        } else {
+          state.map.setTerrain(null);
+        }
+      } catch (error) {
+        console.warn('[Lake Atlas] Terrain could not be applied:', error);
+      }
+    }
+
+    function toggleTerrain() {
+      state.layers.terrain = !state.layers.terrain;
+      $('terrainBtn').classList.toggle('is-active', state.layers.terrain);
+      $('terrainBtn').setAttribute('aria-pressed', String(state.layers.terrain));
+      applyTerrainSetting();
+      if (state.map) {
+        state.map.easeTo({
+          pitch: state.layers.terrain ? 48 : 0,
+          duration: 650
+        });
+      }
+    }
+
+    // ==================================================================
+    // 2. CSV PARSING
+    // ==================================================================
+    function normalizeHeader(value) {
+      return String(value || '')
+        .replace(/^﻿/, '')
+        .toLowerCase()
+        .trim()
+        .replace(/[()[\]{}]/g, ' ')
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    }
+
+    function pickField(headers, aliases) {
+      const normalized = headers.map((h) => ({ original: h, key: normalizeHeader(h) }));
+      for (const alias of aliases) {
+        const exact = normalized.find((h) => h.key === alias);
+        if (exact) return exact.original;
+      }
+      for (const alias of aliases) {
+        const partial = normalized.find((h) => h.key.startsWith(alias + '_') || h.key.endsWith('_' + alias));
+        if (partial) return partial.original;
+      }
+      return null;
+    }
+
+    function parseNumeric(value) {
+      if (typeof value === 'number') return finite(value) ? value : null;
+      if (value === null || value === undefined) return null;
+      let text = String(value).trim();
+      if (!text || /^(n\/?a|nan|null|none|—|-|--)$/i.test(text)) return null;
+      text = text
+        .replace(/\s*(m|meters|metres|ft|feet|foot)\s*$/i, '')
+        .replace(/,/g, '.')
+        .replace(/[^0-9eE+\-.]/g, '');
+      const number = Number.parseFloat(text);
+      return finite(number) ? number : null;
+    }
+
+    function parseFish(value) {
+      if (value === null || value === undefined) return 0;
+      const text = String(value).trim().toLowerCase();
+      if (!text) return 0;
+      if (['true', 'yes', 'y', 'detected', 'fish', 'present', 'school'].includes(text)) return 1;
+      if (['false', 'no', 'n', 'none', 'absent', 'clear'].includes(text)) return 0;
+      const parsed = parseNumeric(value);
+      return parsed && parsed > 0 ? parsed : 0;
+    }
+
+    async function handleCsvFile(file) {
+      if (!window.Papa) {
+        showToast('The CSV parser did not load. Check your connection.', 'error');
+        return;
+      }
+      try {
+        setDataStatus(`Reading ${file.name}…`, 'working');
+        const text = await file.text();
+        const parsed = parseSonarCsv(text, file.name);
+        ingestSonar(parsed, file.name);
+      } catch (error) {
+        console.error('[Lake Atlas] CSV error:', error);
+        $('csvDrop').classList.add('is-error');
+        setDataStatus(error.message || 'The CSV could not be parsed.', 'error');
+        showToast(error.message || 'The CSV could not be parsed.', 'error');
+      }
+    }
+
+    function parseSonarCsv(text, fileName) {
+      if (!text || !text.trim()) throw new Error('That CSV is empty.');
+      const parsed = Papa.parse(text, {
+        header: true,
+        skipEmptyLines: 'greedy',
+        dynamicTyping: false
+      });
+      if (!parsed.data || !parsed.data.length) {
+        const detail = parsed.errors && parsed.errors[0] && parsed.errors[0].message;
+        throw new Error(detail ? `PapaParse: ${detail}` : 'No data rows were found in the CSV.');
+      }
+
+      const headers = (parsed.meta.fields || []).filter(Boolean);
+      if (headers.length < 3) throw new Error('The CSV needs a header row with at least latitude, longitude, and depth columns.');
+
+      const latField = pickField(headers, FIELD_ALIASES.lat);
+      const lonField = pickField(headers, FIELD_ALIASES.lon);
+      const depthField = pickField(headers, FIELD_ALIASES.depth);
+      const fishField = pickField(headers, FIELD_ALIASES.fish);
+
+      if (!latField || !lonField) {
+        throw new Error(`Could not find latitude/longitude columns. Available headers: ${headers.slice(0, 8).join(', ')}.`);
+      }
+      if (!depthField) {
+        throw new Error(`Could not find a depth column. Available headers: ${headers.slice(0, 8).join(', ')}.`);
+      }
+
+      const depthKey = normalizeHeader(depthField);
+      const sampleValues = parsed.data.slice(0, 50).map((row) => row[depthField]).filter((v) => v !== undefined && v !== null);
+      const depthLooksFeet = /(^|_)ft($|_)|feet|foot/.test(depthKey) ||
+        sampleValues.some((value) => /\b(ft|feet|foot)\b/i.test(String(value)));
+      const unitHint = depthLooksFeet ? 'ft' : 'm';
+
+      const points = [];
+      let rejected = 0;
+      let fishContacts = 0;
+      parsed.data.forEach((row) => {
+        const lat = parseNumeric(row[latField]);
+        const lon = parseNumeric(row[lonField]);
+        if (!finite(lat) || !finite(lon) || lat < -90 || lat > 90 || lon < -180 || lon > 180) {
+          rejected += 1;
+          return;
+        }
+        const rawDepth = parseNumeric(row[depthField]);
+        const depth = rawDepth === null ? null : Math.abs(rawDepth);
+        const fish = fishField ? parseFish(row[fishField]) : 0;
+        if (fish > 0) fishContacts += 1;
+        points.push({
+          lat,
+          lon,
+          rawDepth: depth,
+          depth,
+          fish,
+          hasFishField: Boolean(fishField)
+        });
+      });
+
+      if (points.length < 3) {
+        throw new Error(`Only ${points.length} valid coordinate rows were found. Check the latitude/longitude columns and WGS84 coordinate order.`);
+      }
+      const withDepth = points.filter((point) => finite(point.depth) && point.depth > 0).length;
+      if (!withDepth) throw new Error('No positive depth values were found. Check the depth column.');
+
+      return {
+        points,
+        unitHint,
+        hasFishField: Boolean(fishField),
+        fishContacts,
+        rejected,
+        headerInfo: { latField, lonField, depthField, fishField },
+        fileName
+      };
+    }
+
+    function ingestSonar(parsed, fileName, { analyze = true } = {}) {
+      if (state.isDemo) {
+        state.parcel = null;
+        state.parcelName = '';
+        state.parcelFile = '';
+        state.isDemo = false;
+      }
+      state.rawSonar = parsed.points;
+      state.unitHint = parsed.unitHint;
+      state.sourceFileName = fileName || 'sonar-survey.csv';
+      state.sourceName = deriveSurveyName(fileName);
+      state.hasFishField = parsed.hasFishField;
+      state.parseRejected = parsed.rejected;
+      state.userClearedDemo = false;
+      state.warnings = [];
+      if (parsed.rejected) state.warnings.push(`${parsed.rejected} invalid coordinate row${parsed.rejected === 1 ? '' : 's'} skipped.`);
+      resetNarratives();
+      resetDerivedAnalysis();
+      applyDepthUnits();
+      updateIntakeUI();
+      updateChrome();
+      setSurveyState('Survey loaded', true);
+      setDataStatus(`${state.sonar.length.toLocaleString('en-US')} soundings parsed · ${state.effectiveUnit === 'ft' ? 'feet converted to metres' : 'depths in metres'}${parsed.rejected ? ` · ${parsed.rejected} rows skipped` : ''}.`);
+      $('csvDrop').classList.remove('is-error');
+      $('csvDrop').classList.add('is-loaded');
+      $('clearBtn').disabled = false;
+
+      if (state.mapReady && analyze) {
+        runAnalysis({ fit: true, reason: 'csv' });
+      } else if (!state.mapReady) {
+        updateStatsPlaceholder();
+        if (analyze) showToast('Sonar loaded. Connect the map when you are ready.');
+      }
+    }
+
+    function deriveSurveyName(fileName) {
+      const cleaned = String(fileName || '')
+        .replace(/\.[^.]+$/, '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\b(sonar|bathymetry|depth|survey|track|export|data|raw)\b/gi, '')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      return cleaned ? titleCase(cleaned) : 'Sonar Survey';
+    }
+
+    function applyDepthUnits() {
+      const unit = state.settings.depthUnit === 'auto' ? (state.unitHint || 'm') : state.settings.depthUnit;
+      state.effectiveUnit = unit;
+      const factor = unit === 'ft' ? 0.3048 : 1;
+      state.sonar = state.rawSonar.map((point) => ({
+        ...point,
+        depth: finite(point.rawDepth) ? point.rawDepth * factor : null
+      }));
+    }
+
+    // ==================================================================
+    // 3. GEOJSON BOUNDARY PARSING
+    // ==================================================================
+    async function handleGeoJsonFile(file) {
+      try {
+        setDataStatus(`Reading ${file.name}…`, 'working');
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        const features = extractPolygons(parsed);
+        if (!features.length) throw new Error('No Polygon or MultiPolygon features were found in this GeoJSON.');
+
+        if (state.isDemo) {
+          state.rawSonar = [];
+          state.sonar = [];
+          state.sourceName = '';
+          state.sourceFileName = '';
+          state.isDemo = false;
+          resetDerivedAnalysis();
+        }
+
+        state.parcel = turf.featureCollection(features);
+        state.parcelFile = file.name;
+        state.parcelName = parcelDisplayName(features) || deriveSurveyName(file.name);
+        if (!state.sourceName) state.sourceName = state.parcelName;
+        resetNarratives();
+        updateIntakeUI();
+        updateChrome();
+        setSurveyState(state.rawSonar.length ? 'Survey loaded' : 'Parcel loaded', true);
+        setDataStatus(`Parcel boundary loaded from ${file.name} · ${features.length} polygon${features.length === 1 ? '' : 's'}.`);
+        $('geoDrop').classList.remove('is-error');
+        $('geoDrop').classList.add('is-loaded');
+        $('clearBtn').disabled = false;
+
+        if (state.mapReady) {
+          if (state.rawSonar.length) runAnalysis({ fit: true, reason: 'parcel' });
+          else {
+            renderMapLayers();
+            updateStatsPlaceholder();
+            fitToData({ duration: 1000 });
+          }
+        }
+      } catch (error) {
+        console.error('[Lake Atlas] GeoJSON error:', error);
+        $('geoDrop').classList.add('is-error');
+        setDataStatus(error.message || 'The GeoJSON could not be parsed.', 'error');
+        showToast(error.message || 'The GeoJSON could not be parsed.', 'error');
+      }
+    }
+
+    // Ingest a server payload (CSV text + parcel GeoJSON) in one pass. The
+    // parcel is applied first so the single analysis run sees both datasets;
+    // narratives are injected afterwards by the caller, because ingestSonar()
+    // clears any previous care notes.
+    async function loadData({
+      csv,
+      csvFileName = 'mock_sonar_survey.csv',
+      geojson = null,
+      geojsonFileName = 'parcel.geojson'
+    } = {}) {
+      if (!window.turf || !window.Papa) {
+        throw new Error('The map libraries are still loading. Try again in a moment.');
+      }
+      if (typeof csv !== 'string' || !csv.trim()) {
+        throw new Error('No CSV data was supplied.');
+      }
+
+      // Parse first so a malformed CSV cannot leave a half-applied parcel.
+      const parsed = parseSonarCsv(csv, csvFileName);
+
+      let features = null;
+      if (geojson) {
+        features = extractPolygons(geojson);
+        if (!features.length) throw new Error('No Polygon or MultiPolygon features were found in the GeoJSON.');
+
+        if (state.isDemo) {
+          state.rawSonar = [];
+          state.sonar = [];
+          state.sourceName = '';
+          state.sourceFileName = '';
+          state.isDemo = false;
+          resetDerivedAnalysis();
+        }
+
+        state.parcel = turf.featureCollection(features);
+        state.parcelFile = geojsonFileName;
+        state.parcelName = parcelDisplayName(features) || deriveSurveyName(geojsonFileName);
+        if (!state.sourceName) state.sourceName = state.parcelName;
+        $('geoDrop').classList.remove('is-error');
+        $('geoDrop').classList.add('is-loaded');
+        $('clearBtn').disabled = false;
+      }
+
+      ingestSonar(parsed, csvFileName, { analyze: false });
+
+      // Keep the full, readable file stem for server-delivered surveys.
+      // deriveSurveyName() intentionally trims words like "survey", which
+      // would turn "mock_sonar_survey.csv" into just "Mock".
+      const readableName = String(csvFileName || '')
+        .replace(/\.[^.]+$/, '')
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+      if (readableName) {
+        state.sourceName = titleCase(readableName);
+        updateChrome();
+      }
+
+      if (state.mapReady) await runAnalysis({ fit: true, reason: 'server-data' });
+      return getSummary();
+    }
+
+    function extractPolygons(input) {
+      const results = [];
+      const walk = (node, inheritedProperties = {}) => {
+        if (!node || typeof node !== 'object') return;
+        if (node.type === 'FeatureCollection' && Array.isArray(node.features)) {
+          node.features.forEach((feature) => walk(feature, inheritedProperties));
+          return;
+        }
+        if (node.type === 'Feature') {
+          walk(node.geometry, { ...inheritedProperties, ...(node.properties || {}) });
+          return;
+        }
+        if (node.type === 'GeometryCollection' && Array.isArray(node.geometries)) {
+          node.geometries.forEach((geometry) => walk(geometry, inheritedProperties));
+          return;
+        }
+        if (node.type === 'Polygon' || node.type === 'MultiPolygon') {
+          results.push(turf.feature(
+            { type: node.type, coordinates: node.coordinates },
+            { ...inheritedProperties }
+          ));
+        }
+      };
+      walk(input);
+      return results;
+    }
+
+    function parcelDisplayName(features) {
+      const keys = ['name', 'site_name', 'property_name', 'prop_name', 'situs', 'address', 'address_1', 'addr', 'owner', 'owner_name', 'parcel_id', 'parcelid', 'apn', 'pin', 'label'];
+      for (const feature of features) {
+        const props = feature.properties || {};
+        for (const wanted of keys) {
+          const found = Object.keys(props).find((key) => normalizeHeader(key) === wanted);
+          if (found && props[found] !== null && props[found] !== undefined && String(props[found]).trim()) {
+            return String(props[found]).trim();
+          }
+        }
+      }
+      return '';
+    }
+
+    // ==================================================================
+    // 4. SPATIAL ANALYSIS
+    // ------------------------------------------------------------------
+    // 4a. Concave shoreline hull
+    // 4b. 5 m herb buffer outside the hull
+    // 4c. IDW depth grid + marching-squares contours
+    // 4d. Deepest-sounding aeration placement
+    // ==================================================================
+    async function runAnalysis({ fit = false, reason = 'data' } = {}) {
+      const run = ++state.renderToken;
+      state.warnings = [];
+
+      if (!state.mapReady) {
+        updateStatsPlaceholder();
+        return;
+      }
+
+      const validPoints = state.sonar.filter((p) => finite(p.lat) && finite(p.lon));
+      if (validPoints.length < 3) {
+        resetDerivedAnalysis();
+        renderMapLayers();
+        updateStatsPlaceholder();
+        updateChrome();
+        if (state.parcel) fitToData({ duration: 800 });
+        return;
+      }
+
+      setBusy(true);
+      setDataStatus('Smoothing shoreline and interpolating depth…', 'working');
+      await nextFrame();
+      if (run !== state.renderToken) return;
+
+      try {
+        const hull = buildLakeHull(validPoints);
+        state.hull = hull;
+
+        // Herb buffer — adjust CONFIG.defaultBufferMeters or the settings slider.
+        // Turf buffer uses metres with {units:'meters'}, so 5 truly means 5 m.
+        state.herbZone = buildHerbBuffer(hull, state.settings.bufferMeters);
+
+        const depthPoints = state.sonar.filter((p) => finite(p.depth) && p.depth > CONFIG.minDepth);
+        const maxDepth = depthPoints.reduce((max, point) => Math.max(max, point.depth), 0);
+
+        const deepest = depthPoints.reduce((best, point) => (!best || point.depth > best.depth ? point : best), null);
+        state.deepest = deepest ? {
+          lon: deepest.lon,
+          lat: deepest.lat,
+          depth: deepest.depth,
+          fish: deepest.fish || 0
+        } : null;
+
+        let grid = null;
+        if (depthPoints.length >= 2) {
+          grid = buildDepthGrid(hull, depthPoints, maxDepth);
+        }
+        state.grid = grid;
+        state.contours = grid ? buildContourFeatures(grid) : null;
+        state.raster = grid ? renderDepthRaster(grid) : null;
+        state.fishPoints = buildFishFeatureCollection();
+
+        const acres = turf.area(hull) / 4046.8564224;
+        const meanDepth = grid && grid.insideCount ? grid.insideSum / grid.insideCount : (depthPoints.length ? depthPoints.reduce((sum, p) => sum + p.depth, 0) / depthPoints.length : 0);
+        const shoreline = turf.length(hull, { units: 'kilometers' }) * 1000;
+        const herArea = state.herbZone ? turf.area(state.herbZone) : 0;
+        const parcelArea = state.parcel ? state.parcel.features.reduce((sum, f) => sum + (finite(turf.area(f)) ? turf.area(f) : 0), 0) : 0;
+
+        state.stats = {
+          acres,
+          areaM2: turf.area(hull),
+          maxDepth,
+          meanDepth: finite(meanDepth) ? meanDepth : 0,
+          shoreline,
+          soundings: state.sonar.length,
+          depthPoints: depthPoints.length,
+          fishHits: state.sonar.filter((p) => p.fish > 0).length,
+          hasFishField: Boolean(state.hasFishField),
+          herArea,
+          bufferMeters: state.settings.bufferMeters,
+          parcelArea,
+          center: hullCenter(hull),
+          depthLevels: state.contours ? state.contours.levels : []
+        };
+
+        updateStats();
+        updateNarrativeHints();
+        updateChrome();
+        renderMapLayers();
+        updateLegend();
+
+        const fallbackWarning = state.warnings.find((warning) => /convex/i.test(warning));
+        if (fallbackWarning) showToast(fallbackWarning, 'error');
+
+        if (fit) fitToData({ duration: 1200 });
+        if (run === state.renderToken) {
+          setDataStatus([
+            `${state.sonar.length.toLocaleString('en-US')} soundings`,
+            `${formatAcres(turf.area(hull)).replace(/\.00$/, '')} ac`,
+            `${formatDepth(maxDepth)} m max`,
+            reason === 'buffer' ? `${state.settings.bufferMeters} m herb buffer` : ''
+          ].filter(Boolean).join(' · '));
+          setSurveyState('Survey loaded', true);
+        }
+      } catch (error) {
+        console.error('[Lake Atlas] Analysis failed:', error);
+        setDataStatus(error.message || 'Spatial analysis failed.', 'error');
+        showToast(error.message || 'Spatial analysis failed.', 'error');
+      } finally {
+        if (run === state.renderToken) setBusy(false);
+      }
+    }
+
+    function resetDerivedAnalysis() {
+      state.hull = null;
+      state.herbZone = null;
+      state.deepest = null;
+      state.fishPoints = null;
+      state.grid = null;
+      state.contours = null;
+      state.raster = null;
+      state.stats = null;
+      state.warnings = [];
+      state.renderToken += 1;
+      setBusy(false);
+      removeFountainMarker();
+      if (state.mapReady) renderMapLayers();
+      updateLegend();
+    }
+
+    function uniqueCoordinatePoints(points) {
+      const seen = new Set();
+      const result = [];
+      points.forEach((point) => {
+        const key = `${point.lon.toFixed(7)},${point.lat.toFixed(7)}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          result.push(point);
+        }
+      });
+      return result;
+    }
+
+    function estimateSpacingMeters(points) {
+      const sample = points.slice(0, Math.min(260, points.length));
+      const latitudes = sample.map((p) => p.lat);
+      const meanLat = latitudes.reduce((sum, lat) => sum + lat, 0) / Math.max(1, latitudes.length);
+      const cosLat = Math.cos(meanLat * Math.PI / 180);
+      const nearest = [];
+      sample.forEach((point, index) => {
+        let best = Infinity;
+        sample.forEach((other, otherIndex) => {
+          if (index === otherIndex) return;
+          const dx = (point.lon - other.lon) * cosLat;
+          const dy = point.lat - other.lat;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > 0 && d2 < best) best = d2;
+        });
+        if (finite(best)) nearest.push(Math.sqrt(best) * 111320);
+      });
+      nearest.sort((a, b) => a - b);
+      return nearest.length ? nearest[Math.floor(nearest.length / 2)] : 12;
+    }
+
+    function buildLakeHull(points) {
+      const unique = uniqueCoordinatePoints(points);
+      if (unique.length < 3) throw new Error('At least three unique sonar coordinates are needed to draw a shoreline.');
+
+      const features = unique.map((point) => turf.point([point.lon, point.lat]));
+      const collection = turf.featureCollection(features);
+      const spacing = estimateSpacingMeters(unique);
+      const baseEdge = clamp(spacing * 4.6, 18, 155);
+      const attempts = [baseEdge, baseEdge * 1.7, baseEdge * 2.7, 280].map((meters) => clamp(meters, 15, 450));
+
+      let hull = null;
+      for (const maxEdgeMeters of attempts) {
+        try {
+          const candidate = turf.concave(collection, { maxEdge: maxEdgeMeters / 1000 });
+          if (candidate && candidate.geometry && candidate.geometry.coordinates && candidate.geometry.coordinates.length) {
+            hull = candidate;
+            break;
+          }
+        } catch (_) { /* try a looser edge length */ }
+      }
+
+      if (!hull) {
+        state.warnings.push('The concave shoreline could not close cleanly; a convex fallback perimeter was used. Add soundings around the shoreline for a tighter hull.');
+        hull = turf.convex(collection);
+      }
+      if (!hull) throw new Error('The shoreline hull could not be generated. Check the soundings.');
+
+      if (hull.geometry.type === 'Polygon' && hull.geometry.coordinates[0] && hull.geometry.coordinates[0].length > 6) {
+        hull = turf.polygon([smoothRing(hull.geometry.coordinates[0], 2)], hull.properties || {});
+      }
+      return hull;
+    }
+
+    // Chaikin corner-cutting produces a more natural shoreline than the
+    // raw Delaunay triangles from a concave hull. Two passes is deliberately
+    // subtle: it removes sawteeth without inventing bays.
+    function smoothRing(ring, iterations = 2) {
+      let points = ring.slice();
+      if (points.length > 1 && points[0][0] === points[points.length - 1][0] && points[0][1] === points[points.length - 1][1]) {
+        points.pop();
+      }
+      for (let pass = 0; pass < iterations; pass += 1) {
+        if (points.length < 4) break;
+        const next = [];
+        for (let i = 0; i < points.length; i += 1) {
+          const current = points[i];
+          const following = points[(i + 1) % points.length];
+          next.push([
+            current[0] * 0.75 + following[0] * 0.25,
+            current[1] * 0.75 + following[1] * 0.25
+          ]);
+          next.push([
+            current[0] * 0.25 + following[0] * 0.75,
+            current[1] * 0.25 + following[1] * 0.75
+          ]);
+        }
+        points = next;
+      }
+      if (points.length) points.push(points[0].slice());
+      return points;
+    }
+
+    function buildHerbBuffer(hull, meters) {
+      try {
+        const outer = turf.buffer(hull, meters, { units: 'meters', steps: 28 });
+        if (!outer || !outer.geometry) return null;
+
+        // Turf 7 takes difference() as one FeatureCollection of two or more
+        // polygons (older versions accepted two positional arguments). It can
+        // return null when the buffered outline and a complex concave
+        // shoreline share near-identical vertices. Prefer it (it also handles
+        // multi-part buffers), then fall back to a ring polygon built directly
+        // from the buffered outline with the lake as its hole. That fallback
+        // is sufficient for rendering, exporting and area reporting.
+        const difference = turf.difference(turf.featureCollection([outer, hull]));
+        if (difference && difference.geometry) {
+          const area = turf.area(difference);
+          if (finite(area) && area > 0.01) return difference;
+        }
+
+        const outerPolygons = outer.geometry.type === 'Polygon'
+          ? [outer.geometry.coordinates]
+          : outer.geometry.type === 'MultiPolygon'
+            ? outer.geometry.coordinates
+            : [];
+        const hullPolygons = hull.geometry.type === 'Polygon'
+          ? [hull.geometry.coordinates]
+          : hull.geometry.type === 'MultiPolygon'
+            ? hull.geometry.coordinates
+            : [];
+        const holes = hullPolygons
+          .map((polygon) => polygon[0])
+          .filter((ring) => Array.isArray(ring) && ring.length >= 4);
+        if (!outerPolygons.length || !holes.length) return null;
+
+        const rings = outerPolygons.map((polygon) => [polygon[0], ...holes]);
+        const fallback = rings.length === 1
+          ? turf.polygon(rings[0], { kind: 'medicinal_herb_buffer', buffer_m: meters })
+          : turf.multiPolygon(rings, { kind: 'medicinal_herb_buffer', buffer_m: meters });
+        return finite(turf.area(fallback)) && turf.area(fallback) > 0.01 ? fallback : null;
+      } catch (error) {
+        console.warn('[Lake Atlas] Herb buffer failed:', error);
+        state.warnings.push('The herb buffer could not be generated for this shoreline.');
+        return null;
+      }
+    }
+
+    function localProjection(hull, paddingMeters = 0) {
+      const [west, south, east, north] = turf.bbox(hull);
+      const midLat = (south + north) / 2;
+      const cosLat = Math.cos(midLat * Math.PI / 180);
+      const width = Math.max(1, (east - west) * 111320 * cosLat);
+      const height = Math.max(1, (north - south) * 110574);
+      const padX = paddingMeters / width;
+      const padY = paddingMeters / height;
+      return {
+        west: west - (east - west) * padX,
+        east: east + (east - west) * padX,
+        south: south - (north - south) * padY,
+        north: north + (north - south) * padY,
+        width,
+        height,
+        cosLat,
+        toLngLat(x, y) {
+          return [
+            west + (x / width) * (east - west),
+            south + (y / height) * (north - south)
+          ];
+        }
+      };
+    }
+
+    // ==================================================================
+    // IDW INTERPOLATION
+    // ------------------------------------------------------------------
+    // The lake hull's bounding box is divided into a metric grid. For each
+    // cell centre we take the nearest N soundings (searched through a
+    // spatial hash) and compute:
+    //
+    //     depth = Σ(depth_i / d_i^p) / Σ(1 / d_i^p)
+    //
+    // p = CONFIG.idwPower. Larger p makes each sounding more local; lower p
+    // produces a smoother, more general basin. A 0-distance hit wins outright.
+    // The grid is used for the raster, contours, and mean-depth statistic.
+    // It is intentionally browser-side: nothing is uploaded to a server.
+    // ==================================================================
+    function buildDepthGrid(hull, depthPoints, maxDepth) {
+      const projection = localProjection(hull, 0);
+      const lonSpan = projection.east - projection.west;
+      const latSpan = projection.north - projection.south;
+
+      let cols = Math.max(12, Math.round(CONFIG.gridLongSide * (projection.width / Math.max(projection.width, projection.height))));
+      let rows = Math.max(12, Math.round(CONFIG.gridLongSide * (projection.height / Math.max(projection.width, projection.height))));
+      while (cols * rows > CONFIG.maxGridCells) {
+        cols = Math.max(10, Math.round(cols * 0.9));
+        rows = Math.max(10, Math.round(rows * 0.9));
+      }
+
+      const cellWidth = projection.width / cols;
+      const cellHeight = projection.height / rows;
+      const bucketSize = Math.max(8, Math.max(cellWidth, cellHeight) * 2.4);
+      const bucketMap = new Map();
+      const keyFor = (bx, by) => `${bx}:${by}`;
+
+      const depths = depthPoints
+        .filter((point) => finite(point.depth))
+        .map((point) => {
+          const x = (point.lon - projection.west) / lonSpan * projection.width;
+          const y = (point.lat - projection.south) / latSpan * projection.height;
+          return { x, y, depth: point.depth };
+        });
+      if (!depths.length) return null;
+
+      depths.forEach((point) => {
+        const bx = Math.floor(point.x / bucketSize);
+        const by = Math.floor(point.y / bucketSize);
+        const key = keyFor(bx, by);
+        if (!bucketMap.has(key)) bucketMap.set(key, []);
+        bucketMap.get(key).push(point);
+      });
+
+      const values = new Float32Array(cols * rows);
+      const inside = new Uint8Array(cols * rows);
+      let insideSum = 0;
+      let insideCount = 0;
+      let minimum = Infinity;
+      let maximum = -Infinity;
+
+      for (let row = 0; row < rows; row += 1) {
+        const y = projection.height - ((row + 0.5) / rows) * projection.height;
+        const lat = projection.south + (y / projection.height) * latSpan;
+        for (let col = 0; col < cols; col += 1) {
+          const x = ((col + 0.5) / cols) * projection.width;
+          const lon = projection.west + (x / projection.width) * lonSpan;
+          const bx = Math.floor(x / bucketSize);
+          const by = Math.floor(y / bucketSize);
+          const candidates = [];
+          let ring = 0;
+          let collected = 0;
+          const maxRing = 18;
+          while (ring <= maxRing && collected < CONFIG.idwNeighbours + 2) {
+            for (let dx = -ring; dx <= ring; dx += 1) {
+              for (let dy = -ring; dy <= ring; dy += 1) {
+                if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+                const bucket = bucketMap.get(keyFor(bx + dx, by + dy));
+                if (bucket) {
+                  for (const candidate of bucket) candidates.push(candidate);
+                  collected = candidates.length;
+                }
+              }
+            }
+            ring += 1;
+          }
+
+          let value;
+          if (candidates.length) {
+            candidates.sort((a, b) => {
+              const da = (a.x - x) ** 2 + (a.y - y) ** 2;
+              const db = (b.x - x) ** 2 + (b.y - y) ** 2;
+              return da - db;
+            });
+            const nearest = candidates.slice(0, CONFIG.idwNeighbours);
+            let numerator = 0;
+            let denominator = 0;
+            for (const candidate of nearest) {
+              const distance = Math.hypot(candidate.x - x, candidate.y - y);
+              if (distance < 0.55) {
+                numerator = candidate.depth;
+                denominator = 1;
+                break;
+              }
+              const weight = 1 / Math.pow(distance, CONFIG.idwPower);
+              numerator += candidate.depth * weight;
+              denominator += weight;
+            }
+            value = denominator ? numerator / denominator : nearest[0].depth;
+          } else {
+            value = maxDepth * 0.5;
+          }
+
+          value = clamp(value, 0, maxDepth * 1.03);
+          const index = row * cols + col;
+          values[index] = value;
+          minimum = Math.min(minimum, value);
+          maximum = Math.max(maximum, value);
+
+          let isInside = false;
+          try {
+            isInside = turf.booleanPointInPolygon(turf.point([lon, lat]), hull);
+          } catch (_) { isInside = false; }
+          if (isInside) {
+            inside[index] = 1;
+            insideSum += value;
+            insideCount += 1;
+          }
+        }
+      }
+
+      return {
+        projection,
+        cols,
+        rows,
+        cellWidth,
+        cellHeight,
+        values,
+        inside,
+        insideSum,
+        insideCount,
+        minDepth: minimum,
+        maxDepth,
+        lonSpan,
+        latSpan,
+        levels: niceContourLevels(maxDepth)
+      };
+    }
+
+    function depthColor(normalized) {
+      const t = clamp(normalized, 0, 1);
+      for (let i = 1; i < DEPTH_RAMP.length; i += 1) {
+        const [t1, c1] = DEPTH_RAMP[i];
+        if (t <= t1) {
+          const [t0, c0] = DEPTH_RAMP[i - 1];
+          const local = t1 === t0 ? 0 : (t - t0) / (t1 - t0);
+          return [
+            Math.round(c0[0] + (c1[0] - c0[0]) * local),
+            Math.round(c0[1] + (c1[1] - c0[1]) * local),
+            Math.round(c0[2] + (c1[2] - c0[2]) * local)
+          ];
+        }
+      }
+      return DEPTH_RAMP[DEPTH_RAMP.length - 1][1];
+    }
+
+    function renderDepthRaster(grid) {
+      const canvas = document.createElement('canvas');
+      const low = document.createElement('canvas');
+      low.width = grid.cols;
+      low.height = grid.rows;
+      const lowCtx = low.getContext('2d');
+      const image = lowCtx.createImageData(grid.cols, grid.rows);
+      const maxDepth = grid.maxDepth || 1;
+
+      for (let row = 0; row < grid.rows; row += 1) {
+        for (let col = 0; col < grid.cols; col += 1) {
+          const index = row * grid.cols + col;
+          const normalized = grid.values[index] / maxDepth;
+          const color = depthColor(normalized);
+          const pixel = (row * grid.cols + col) * 4;
+          image.data[pixel] = color[0];
+          image.data[pixel + 1] = color[1];
+          image.data[pixel + 2] = color[2];
+          image.data[pixel + 3] = 255;
+        }
+      }
+      lowCtx.putImageData(image, 0, 0);
+
+      const maxPixels = 1300;
+      const scale = clamp(Math.floor(maxPixels / Math.max(grid.cols, grid.rows)), 3, 10);
+      canvas.width = grid.cols * scale;
+      canvas.height = grid.rows * scale;
+      const ctx = canvas.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(low, 0, 0, canvas.width, canvas.height);
+
+      // Clip the raster exactly to the smoothed lake hull.
+      const hull = state.hull;
+      const p = grid.projection;
+      const countryX = (lon) => ((lon - p.west) / (p.east - p.west)) * canvas.width;
+      const countryY = (lat) => ((p.north - lat) / (p.north - p.south)) * canvas.height;
+
+      const polygons = hull.geometry.type === 'Polygon'
+        ? [hull.geometry.coordinates]
+        : (hull.geometry.type === 'MultiPolygon' ? hull.geometry.coordinates : []);
+      ctx.beginPath();
+      polygons.forEach((rings) => {
+        rings.forEach((ring) => {
+          if (!ring || !ring.length) return;
+          ring.forEach((coordinate, index) => {
+            const x = countryX(coordinate[0]);
+            const y = countryY(coordinate[1]);
+            if (index === 0) ctx.moveTo(x, y);
+            else ctx.lineTo(x, y);
+          });
+          ctx.closePath();
+        });
+      });
+      ctx.globalCompositeOperation = 'destination-in';
+      ctx.fillStyle = '#fff';
+      ctx.fill('evenodd');
+      ctx.globalCompositeOperation = 'source-over';
+
+      const coordinates = [
+        [p.west, p.north],
+        [p.east, p.north],
+        [p.east, p.south],
+        [p.west, p.south]
+      ];
+      return {
+        url: canvas.toDataURL('image/png'),
+        coordinates,
+        width: canvas.width,
+        height: canvas.height
+      };
+    }
+
+    function niceContourLevels(maxDepth) {
+      if (!finite(maxDepth) || maxDepth <= 0.4) return [];
+      const intervals = [0.25, 0.5, 1, 2, 5, 10, 20, 25, 50];
+      let interval = intervals[intervals.length - 1];
+      for (const candidate of intervals) {
+        if (maxDepth / candidate <= CONFIG.contourTarget) {
+          interval = candidate;
+          break;
+        }
+      }
+      const levels = [];
+      for (let value = interval; value < maxDepth * 0.96; value += interval) {
+        levels.push(Number(value.toFixed(2)));
+      }
+      if (levels.length > 7) return levels.filter((_, index) => index % Math.ceil(levels.length / 6) === 0);
+      return levels;
+    }
+
+    // Marching squares on the IDW grid. We compute each cell's four corner
+    // values, locate threshold crossings on the edges, and pair them into
+    // line segments. Segments whose midpoints fall outside the shoreline are
+    // discarded so contours stay inside the water.
+    function buildContourFeatures(grid) {
+      const features = [];
+      const levels = grid.levels;
+      const { cols, rows, values, projection } = grid;
+      const lonSpan = projection.east - projection.west;
+      const latSpan = projection.north - projection.south;
+
+      // Grid values live at cell centres, not cell corners.
+      const pointFor = (row, col) => {
+        const x = ((col + 0.5) / cols) * projection.width;
+        const y = projection.height - ((row + 0.5) / rows) * projection.height;
+        return [x, y];
+      };
+      const toLngLat = (point) => [
+        projection.west + (point[0] / projection.width) * lonSpan,
+        projection.south + (point[1] / projection.height) * latSpan
+      ];
+      const interpolate = (a, b, level) => {
+        const denominator = b.value - a.value;
+        const t = denominator === 0 ? 0.5 : (level - a.value) / denominator;
+        return [a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t];
+      };
+      // pointFor() returns [x, y]; interpolate() needs named x/y/value
+      // properties, so build nodes explicitly rather than spreading the array
+      // (spreading an array into an object produces numeric keys, not x/y).
+      const nodeFor = (point, value) => ({ x: point[0], y: point[1], value });
+      const valuesAt = (row, col) => values[row * cols + col];
+
+      for (const level of levels) {
+        const lines = [];
+        for (let row = 0; row < rows - 1; row += 1) {
+          for (let col = 0; col < cols - 1; col += 1) {
+            const v0 = valuesAt(row, col);
+            const v1 = valuesAt(row, col + 1);
+            const v2 = valuesAt(row + 1, col + 1);
+            const v3 = valuesAt(row + 1, col);
+
+            const corners = [v0, v1, v2, v3];
+            const below = corners.map((value) => value < level);
+            if (below.every(Boolean) || below.every((value) => !value)) continue;
+
+            const p0 = pointFor(row, col);
+            const p1 = pointFor(row, col + 1);
+            const p2 = pointFor(row + 1, col + 1);
+            const p3 = pointFor(row + 1, col);
+            const crossings = [];
+
+            if (below[0] !== below[1]) crossings.push(interpolate(nodeFor(p0, v0), nodeFor(p1, v1), level));
+            if (below[1] !== below[2]) crossings.push(interpolate(nodeFor(p1, v1), nodeFor(p2, v2), level));
+            if (below[2] !== below[3]) crossings.push(interpolate(nodeFor(p2, v2), nodeFor(p3, v3), level));
+            if (below[3] !== below[0]) crossings.push(interpolate(nodeFor(p3, v3), nodeFor(p0, v0), level));
+
+            if (crossings.length < 2) continue;
+            const pairs = crossings.length === 2
+              ? [[crossings[0], crossings[1]]]
+              : [[crossings[0], crossings[1]], [crossings[2], crossings[3]]];
+
+            for (const pair of pairs) {
+              const mid = [(pair[0][0] + pair[1][0]) / 2, (pair[0][1] + pair[1][1]) / 2];
+              const midLngLat = toLngLat(mid);
+              let insideHull = false;
+              try {
+                insideHull = turftBoolean(midLngLat, state.hull);
+              } catch (_) { insideHull = false; }
+              if (!insideHull) continue;
+              lines.push([toLngLat(pair[0]), toLngLat(pair[1])]);
+            }
+          }
+        }
+        if (lines.length) {
+          features.push(turf.feature(
+            { type: 'MultiLineString', coordinates: lines },
+            { level, kind: 'depth_contour' }
+          ));
+        }
+      }
+      if (!features.length) return null;
+      const collection = turf.featureCollection(features);
+      // The legend and summary need the levels, not only the geometries.
+      collection.levels = levels;
+      return collection;
+    }
+
+    function turftBoolean(lngLat, polygon) {
+      return turf.booleanPointInPolygon(turf.point(lngLat), polygon);
+    }
+
+    function buildFishFeatureCollection() {
+      const fish = state.sonar
+        .filter((point) => point.fish > 0 && finite(point.lat) && finite(point.lon))
+        .slice(0, CONFIG.maxFishMarkers);
+      if (!fish.length) return null;
+      return turf.featureCollection(fish.map((point) => turf.point(
+        [point.lon, point.lat],
+        { fish: point.fish, depth: finite(point.depth) ? Number(point.depth.toFixed(2)) : null }
+      )));
+    }
+
+    function hullCenter(hull) {
+      try {
+        const center = turf.centerOfMass(hull);
+        return { lon: center.geometry.coordinates[0], lat: center.geometry.coordinates[1] };
+      } catch (_) {
+        const [west, south, east, north] = turf.bbox(hull);
+        return { lon: (west + east) / 2, lat: (south + north) / 2 };
+      }
+    }
+
+    // ==================================================================
+    // 5. MAP LAYER RENDERING
+    // ==================================================================
+    function ensurePatterns() {
+      if (!state.map || state.map.hasImage('atlas-herb-hatch')) return;
+      const size = 48;
+      const canvas = document.createElement('canvas');
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, size, size);
+      ctx.strokeStyle = 'rgba(94, 110, 68, .78)';
+      ctx.lineWidth = 1.15;
+      for (let i = -size; i < size * 2; i += 10) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i + size, size);
+        ctx.stroke();
+      }
+      ctx.fillStyle = 'rgba(125, 139, 91, .85)';
+      for (let x = 6; x < size; x += 20) {
+        for (let y = 8; y < size; y += 20) {
+          ctx.beginPath();
+          ctx.ellipse(x, y, 1.4, 0.8, -0.7, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      try {
+        state.map.addImage('atlas-herb-hatch', ctx.getImageData(0, 0, size, size), { pixelRatio: 2 });
+      } catch (error) {
+        console.warn('[Lake Atlas] Herb pattern could not be added:', error);
+      }
+    }
+
+    function removeMapLayersAndSources() {
+      if (!state.map || !state.mapReady) return;
+      const map = state.map;
+      Object.values(LAYER_IDS).forEach((id) => {
+        if (map.getLayer(id)) {
+          try { map.removeLayer(id); } catch (_) { /* noop */ }
+        }
+      });
+      Object.values(SOURCE_IDS).forEach((id) => {
+        if (map.getSource(id)) {
+          try { map.removeSource(id); } catch (_) { /* noop */ }
+        }
+      });
+      if (map.getLayer('atlas-hillshade')) {
+        // Keep the hillshade; it belongs to the terrain treatment.
+      }
+    }
+
+    function addLayer(layer) {
+      const before = firstSymbolLayerId();
+      try {
+        if (before) state.map.addLayer(layer, before);
+        else state.map.addLayer(layer);
+      } catch (error) {
+        console.warn('[Lake Atlas] Layer failed:', layer.id, error);
+      }
+    }
+
+    function addLayerGroup(id, ids) {
+      state.layerIds[id] = ids;
+    }
+
+    function renderMapLayers() {
+      if (!state.map || !state.mapReady) return;
+      removeMapLayersAndSources();
+      ensurePatterns();
+
+      const visibility = (group) => state.layers[group] ? 'visible' : 'none';
+
+      // Parcel fill sits under the lake.
+      if (state.parcel && state.parcel.features.length) {
+        state.map.addSource(SOURCE_IDS.parcel, { type: 'geojson', data: state.parcel });
+        addLayer({
+          id: LAYER_IDS.parcelFill,
+          type: 'fill',
+          source: SOURCE_IDS.parcel,
+          layout: { visibility: visibility('property') },
+          paint: { 'fill-color': '#7c8454', 'fill-opacity': 0.045 }
+        });
+      }
+
+      if (state.hull) {
+        state.map.addSource(SOURCE_IDS.hull, { type: 'geojson', data: turf.featureCollection([state.hull]) });
+        addLayer({
+          id: LAYER_IDS.lakeFill,
+          type: 'fill',
+          source: SOURCE_IDS.hull,
+          paint: { 'fill-color': '#dbe6da', 'fill-opacity': 0.72 }
+        });
+      }
+
+      if (state.herbZone) {
+        const herbCollection = turf.featureCollection([state.herbZone]);
+        state.map.addSource(SOURCE_IDS.herb, { type: 'geojson', data: herbCollection });
+        addLayer({
+          id: LAYER_IDS.herbFill,
+          type: 'fill',
+          source: SOURCE_IDS.herb,
+          layout: { visibility: visibility('herbs') },
+          paint: { 'fill-color': '#7e8b55', 'fill-opacity': 0.2 }
+        });
+        if (state.map.hasImage('atlas-herb-hatch')) {
+          addLayer({
+            id: LAYER_IDS.herbPattern,
+            type: 'fill',
+            source: SOURCE_IDS.herb,
+            layout: { visibility: visibility('herbs') },
+            paint: { 'fill-pattern': 'atlas-herb-hatch', 'fill-opacity': 0.64 }
+          });
+        }
+        addLayer({
+          id: LAYER_IDS.herbLine,
+          type: 'line',
+          source: SOURCE_IDS.herb,
+          layout: { visibility: visibility('herbs') },
+          paint: {
+            'line-color': '#6d7a4b',
+            'line-width': 1,
+            'line-opacity': 0.85,
+            'line-dasharray': [2, 2]
+          }
+        });
+      }
+
+      if (state.raster) {
+        state.map.addSource(SOURCE_IDS.bathymetry, {
+          type: 'image',
+          url: state.raster.url,
+          coordinates: state.raster.coordinates
+        });
+        addLayer({
+          id: LAYER_IDS.bathymetry,
+          type: 'raster',
+          source: SOURCE_IDS.bathymetry,
+          layout: { visibility: visibility('depth') },
+          paint: {
+            'raster-opacity': 0.93,
+            'raster-fade-duration': 0,
+            'raster-resampling': 'linear'
+          }
+        });
+      }
+
+      if (state.contours && state.contours.features.length) {
+        state.map.addSource(SOURCE_IDS.contours, { type: 'geojson', data: state.contours });
+        addLayer({
+          id: LAYER_IDS.contourGlow,
+          type: 'line',
+          source: SOURCE_IDS.contours,
+          layout: { visibility: visibility('depth') },
+          paint: {
+            'line-color': '#f5efdf',
+            'line-width': 2.9,
+            'line-opacity': 0.52,
+            'line-blur': 0.7
+          }
+        });
+        addLayer({
+          id: LAYER_IDS.contours,
+          type: 'line',
+          source: SOURCE_IDS.contours,
+          layout: { visibility: visibility('depth') },
+          paint: {
+            'line-color': '#214846',
+            'line-width': 0.85,
+            'line-opacity': 0.72
+          }
+        });
+      }
+
+      if (state.hull) {
+        addLayer({
+          id: LAYER_IDS.shorelineHalo,
+          type: 'line',
+          source: SOURCE_IDS.hull,
+          paint: {
+            'line-color': '#f8f2e4',
+            'line-width': 4.2,
+            'line-opacity': 0.7
+          }
+        });
+        addLayer({
+          id: LAYER_IDS.shoreline,
+          type: 'line',
+          source: SOURCE_IDS.hull,
+          paint: {
+            'line-color': '#315c55',
+            'line-width': 1.6,
+            'line-opacity': 0.94
+          }
+        });
+      }
+
+      if (state.fishPoints && state.fishPoints.features.length) {
+        state.map.addSource(SOURCE_IDS.fish, { type: 'geojson', data: state.fishPoints });
+        addLayer({
+          id: LAYER_IDS.fish,
+          type: 'circle',
+          source: SOURCE_IDS.fish,
+          layout: { visibility: visibility('fish') },
+          paint: {
+            'circle-radius': [
+              'interpolate', ['linear'], ['get', 'fish'],
+              1, 3.8,
+              3, 4.8,
+              8, 6.2
+            ],
+            'circle-color': '#b7633e',
+            'circle-opacity': 0.88,
+            'circle-stroke-color': '#f8f2e4',
+            'circle-stroke-width': 1.5,
+            'circle-stroke-opacity': 0.95
+          }
+        });
+      }
+
+      // Stylized park boundary sits above the lake layers, below base labels.
+      if (state.parcel && state.parcel.features.length) {
+        addLayer({
+          id: LAYER_IDS.parcelHalo,
+          type: 'line',
+          source: SOURCE_IDS.parcel,
+          layout: { visibility: visibility('property') },
+          paint: {
+            'line-color': '#f8f2e4',
+            'line-width': 6.4,
+            'line-opacity': 0.8
+          }
+        });
+        addLayer({
+          id: LAYER_IDS.parcelLine,
+          type: 'line',
+          source: SOURCE_IDS.parcel,
+          layout: { visibility: visibility('property') },
+          paint: {
+            'line-color': '#925a3a',
+            'line-width': 2.6,
+            'line-opacity': 0.92,
+            'line-dasharray': [3.2, 1.2]
+          }
+        });
+      }
+
+      addLayerGroup('depth', [LAYER_IDS.bathymetry, LAYER_IDS.contourGlow, LAYER_IDS.contours].filter((id) => state.map.getLayer(id)));
+      addLayerGroup('herbs', [LAYER_IDS.herbFill, LAYER_IDS.herbPattern, LAYER_IDS.herbLine].filter((id) => state.map.getLayer(id)));
+      addLayerGroup('fish', [LAYER_IDS.fish].filter((id) => state.map.getLayer(id)));
+      addLayerGroup('property', [LAYER_IDS.parcelFill, LAYER_IDS.parcelHalo, LAYER_IDS.parcelLine].filter((id) => state.map.getLayer(id)));
+
+      renderFountainMarker();
+      updateLayerPanelAvailability();
+    }
+
+    function setLayerGroupVisibility(group, visible) {
+      state.layers[group] = visible;
+      (state.layerIds[group] || []).forEach((id) => {
+        if (state.map && state.map.getLayer(id)) {
+          state.map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+        }
+      });
+    }
+
+    function updateLayerPanelAvailability() {
+      const availability = {
+        depth: Boolean(state.raster || state.contours),
+        herbs: Boolean(state.herbZone),
+        fish: Boolean(state.fishPoints && state.fishPoints.features.length),
+        property: Boolean(state.parcel)
+      };
+      document.querySelectorAll('[data-layer-toggle]').forEach((input) => {
+        const group = input.dataset.layerToggle;
+        const row = input.closest('.layer-row');
+        const available = availability[group];
+        input.disabled = !available;
+        if (row) row.style.opacity = available ? '1' : '.45';
+      });
+    }
+
+    function renderFountainMarker() {
+      removeFountainMarker();
+      if (!state.map || !state.mapReady || !state.deepest) return;
+      const { lon, lat, depth } = state.deepest;
+      const element = document.createElement('button');
+      element.type = 'button';
+      element.className = 'fountain-marker';
+      element.setAttribute('aria-label', `Proposed aeration fountain, deepest sounding ${formatDepth(depth)} metres`);
+      element.innerHTML = `
+        <svg viewBox="0 0 64 64" fill="none" aria-hidden="true">
+          <circle cx="32" cy="32" r="25" fill="#f8f2e4" stroke="#9c5f3e" stroke-width="1.5"/>
+          <circle cx="32" cy="32" r="20.5" stroke="#9c5f3e" stroke-width=".65" opacity=".55"/>
+          <path d="M32 44V30" stroke="#6f4a34" stroke-width="2.1" stroke-linecap="round"/>
+          <path d="M24 38c0-5 3.6-9 8-9s8 4 8 9" stroke="#4d7c74" stroke-width="1.8" stroke-linecap="round"/>
+          <path d="M26 35c-1.8-3.8-.5-8 3.4-10.4M38 35c1.8-3.8.5-8-3.4-10.4M32 31V16m0 0-3 3m3-3 3 3" stroke="#4d7c74" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="32" cy="13.5" r="1.6" fill="#9c5f3e"/>
+        </svg>
+        <span class="fountain-tag">Aeration · ${escapeHtml(formatDepth(depth))} m</span>
+      `;
+      const popup = new mapboxgl.Popup({ offset: 27, closeButton: true, className: 'atlas-popup' })
+        .setHTML(`
+          <p class="popup-kicker">Proposed aeration site</p>
+          <h3 class="popup-title">Deepest basin</h3>
+          <dl class="popup-data">
+            <dt>Depth</dt><dd>${escapeHtml(formatDepth(depth))} m</dd>
+            <dt>Position</dt><dd>${lat.toFixed(5)}, ${lon.toFixed(5)}</dd>
+            <dt>Method</dt><dd>Deepest CSV sounding</dd>
+          </dl>
+        `);
+      const marker = new mapboxgl.Marker({ element, anchor: 'center' })
+        .setLngLat([lon, lat])
+        .setPopup(popup)
+        .addTo(state.map);
+      element.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          marker.togglePopup();
+        }
+      });
+      state.marker = marker;
+    }
+
+    function removeFountainMarker() {
+      if (state.marker) {
+        try { state.marker.remove(); } catch (_) { /* noop */ }
+        state.marker = null;
+      }
+    }
+
+    function handleMapClick(event) {
+      if (!state.map || !state.mapReady) return;
+      const map = state.map;
+      if (map.getLayer(LAYER_IDS.fish) && state.layers.fish) {
+        const features = map.queryRenderedFeatures(event.point, { layers: [LAYER_IDS.fish] });
+        if (features.length) {
+          removeMapFishPopup();
+          const feature = features[0].properties || {};
+          const coordinates = features[0].geometry.coordinates.slice();
+          const popup = new mapboxgl.Popup({ offset: 12, closeButton: false, className: 'atlas-popup' })
+            .setLngLat(coordinates)
+            .setHTML(`
+              <p class="popup-kicker">Sonar contact</p>
+              <h3 class="popup-title">Fish activity</h3>
+              <dl class="popup-data">
+                <dt>Detection</dt><dd>${escapeHtml(String(feature.fish || 1))}</dd>
+                <dt>Depth</dt><dd>${feature.depth ? escapeHtml(formatDepth(Number(feature.depth))) + ' m' : '—'}</dd>
+              </dl>
+            `)
+            .addTo(map);
+          state.mapFishPopup = popup;
+        }
+      }
+    }
+
+    function handleMapMouseMove(event) {
+      if (!state.map || !state.mapReady) return;
+      if (state.map.getLayer(LAYER_IDS.fish) && state.layers.fish) {
+        const features = state.map.queryRenderedFeatures(event.point, { layers: [LAYER_IDS.fish] });
+        state.map.getCanvas().style.cursor = features.length ? 'pointer' : '';
+      } else {
+        state.map.getCanvas().style.cursor = '';
+      }
+    }
+
+    function fitToData({ duration = 1000 } = {}) {
+      if (!state.map || !state.mapReady) return;
+      const bounds = new mapboxgl.LngLatBounds();
+      let hasBounds = false;
+      const extendCoordinates = (coords) => {
+        if (!Array.isArray(coords)) return;
+        if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
+          bounds.extend([coords[0], coords[1]]);
+          hasBounds = true;
+          return;
+        }
+        coords.forEach(extendCoordinates);
+      };
+
+      if (state.parcel) state.parcel.features.forEach((feature) => extendCoordinates(feature.geometry.coordinates));
+      if (state.hull) extendCoordinates(state.hull.geometry.coordinates);
+      if (state.herbZone) extendCoordinates(state.herbZone.geometry.coordinates);
+      if (!hasBounds) {
+        state.sonar.slice(0, 1200).forEach((point) => {
+          bounds.extend([point.lon, point.lat]);
+          hasBounds = true;
+        });
+      }
+      if (!hasBounds) return;
+
+      const leftPadding = MOBILE_QUERY.matches ? 28 : ($('sidebar')?.offsetWidth || 400) + 34;
+      const bottomPadding = MOBILE_QUERY.matches ? 135 : 64;
+      try {
+        state.map.fitBounds(bounds, {
+          padding: { top: 112, right: 72, bottom: bottomPadding, left: leftPadding },
+          duration,
+          maxZoom: 16.2,
+          pitch: state.layers.terrain ? 45 : 0,
+          bearing: -10
+        });
+      } catch (error) {
+        console.warn('[Lake Atlas] Fit failed:', error);
+      }
+    }
+
+    // ==================================================================
+    // 6. UI / STATS / CHROME
+    // ==================================================================
+    function updateStats() {
+      const stats = state.stats;
+      if (!stats) {
+        updateStatsPlaceholder();
+        return;
+      }
+      $('statArea').textContent = formatAcres(stats.areaM2);
+      $('statMax').textContent = formatDepth(stats.maxDepth);
+      $('statMean').textContent = formatDepth(stats.meanDepth);
+      $('statFish').textContent = stats.hasFishField ? formatNumber(stats.fishHits, 0) : '—';
+      $('statFishUnit').textContent = stats.hasFishField ? (stats.fishHits === 1 ? 'contact' : 'contacts') : '';
+      $('statAreaFoot').textContent = `${formatNumber(stats.areaM2, 0)} m² inside shoreline`;
+      $('statMaxFoot').textContent = state.deepest
+        ? `At ${Number(state.deepest.lat).toFixed(4)}°, ${Number(state.deepest.lon).toFixed(4)}°`
+        : 'Deepest sonar return';
+      $('statMeanFoot').textContent = stats.depthLevels?.length
+        ? `${stats.depthLevels.length} depth contour${stats.depthLevels.length === 1 ? '' : 's'}`
+        : 'Area-weighted IDW grid';
+      $('statFishFoot').textContent = stats.hasFishField
+        ? `${stats.soundings ? Math.round((stats.fishHits / stats.soundings) * 100) : 0}% of soundings`
+        : 'No fish column detected';
+      $('measureShore').textContent = `${formatMeters(stats.shoreline)} shore`;
+      $('measureSoundings').textContent = `${stats.soundings.toLocaleString('en-US')} soundings`;
+      $('measureParcel').textContent = state.parcel
+        ? `${formatAcres(stats.parcelArea)} ac parcel`
+        : `${Math.round(stats.herArea).toLocaleString('en-US')} m² herb ring`;
+      updateIntakeUI();
+      updateLegend();
+    }
+
+    function updateStatsPlaceholder() {
+      $('statArea').textContent = '—';
+      $('statMax').textContent = '—';
+      $('statMean').textContent = '—';
+      $('statFish').textContent = '—';
+      $('statFishUnit').textContent = '';
+      $('statAreaFoot').textContent = 'Hull area from soundings';
+      $('statMaxFoot').textContent = 'Deepest sonar return';
+      $('statMeanFoot').textContent = 'Interpolated lake surface';
+      $('statFishFoot').textContent = 'Returns flagged by sonar';
+      $('measureShore').textContent = 'Shoreline —';
+      $('measureSoundings').textContent = '0 soundings';
+      $('measureParcel').textContent = state.parcel ? 'Parcel loaded' : 'No parcel';
+    }
+
+    function updateChrome() {
+      const title = state.sourceName || state.parcelName || 'Uncharted waters';
+      $('lakeName').textContent = title;
+      $('sampleTag').hidden = !state.isDemo;
+      $('propertyName').textContent = state.isDemo
+        ? 'Larkspur Preserve · illustrative field data'
+        : state.parcelName
+          ? `${state.parcelName}${state.sourceName && state.parcelName !== state.sourceName ? ' · uploaded parcel' : ''}`
+          : state.sourceFileName
+            ? 'Boundary pending · sonar-only survey'
+            : 'Upload a sonar track to begin';
+      const center = state.stats?.center;
+      $('plateCoords').textContent = center
+        ? `${center.lat.toFixed(4)}° N · ${Math.abs(center.lon).toFixed(4)}° W`
+        : state.parcel
+          ? 'Parcel extents'
+          : 'Coordinates pending';
+      $('plateSoundings').textContent = `${state.sonar.length.toLocaleString('en-US')} soundings`;
+      $('surveyNo').textContent = state.isDemo ? 'No. 0426-D' : state.stats ? 'No. 0426' : 'No. —';
+      $('careSubject').textContent = title === 'Uncharted waters' ? 'this survey' : title;
+      updateNarrativeHints();
+    }
+
+    function updateIntakeUI() {
+      if (state.sourceFileName) {
+        $('csvFile').textContent = state.isDemo ? 'Sample soundings · loaded' : state.sourceFileName;
+        $('csvBadge').textContent = `${state.sonar.length.toLocaleString('en-US')} pts`;
+        $('csvDetail').textContent = state.effectiveUnit === 'ft' ? 'feet → metres' : 'WGS84 · depth in m';
+        $('csvDrop').classList.add('is-loaded');
+      } else {
+        $('csvFile').textContent = 'Choose CSV';
+        $('csvBadge').textContent = 'CSV';
+        $('csvDetail').textContent = 'lat · lon · depth · fish';
+        $('csvDrop').classList.remove('is-loaded');
+      }
+      if (state.parcelFile || state.isDemo) {
+        $('geoFile').textContent = state.isDemo ? 'Sample parcel · loaded' : state.parcelFile;
+        $('geoBadge').textContent = state.parcel ? `${state.parcel.features.length} poly` : 'GEOJSON';
+        $('geoDetail').textContent = state.parcelName || 'Property polygon';
+        $('geoDrop').classList.add('is-loaded');
+      } else {
+        $('geoFile').textContent = 'Choose GeoJSON';
+        $('geoBadge').textContent = 'GEOJSON';
+        $('geoDetail').textContent = 'Property polygon';
+        $('geoDrop').classList.remove('is-loaded');
+      }
+      $('clearBtn').disabled = !(state.sonar.length || state.parcel);
+      updateStatsPlaceholderIfEmpty();
+    }
+
+    function updateStatsPlaceholderIfEmpty() {
+      if (!state.stats) updateStatsPlaceholder();
+    }
+
+    function updateLegend() {
+      const legend = $('mapLegend');
+      if (!state.stats || !state.stats.maxDepth) {
+        legend.hidden = true;
+        return;
+      }
+      legend.hidden = false;
+      const max = state.stats.maxDepth;
+      const mid = max / 2;
+      $('legendAria').textContent = `0–${formatDepth(max)} m`;
+      $('legendMid').textContent = `${formatDepth(mid)} m`;
+      $('legendMax').textContent = `${formatDepth(max)} m`;
+    }
+
+    function updateNarrativeHints() {
+      const stats = state.stats;
+      const fishHint = stats
+        ? `${stats.hasFishField ? `${stats.fishHits} fish contacts across ${formatAcres(stats.areaM2)} acres.` : 'No fish column was detected in this CSV.'} Add stocking guidance, habitat observations, and survey priorities—or generate a note with the AI brief.`
+        : 'Awaiting a fisheries note. Add species observations, survey gaps, and recommended management actions.';
+      const aerationHint = stats
+        ? `Deepest sounding is ${formatDepth(stats.maxDepth)} m. Aeration is proposed at that basin; describe mixing, oxygen, and maintenance expectations—or generate a note with the AI brief.`
+        : 'Awaiting an aeration note. Explain why the deepest basin was selected and what water-quality outcomes to expect.';
+      const herbHint = stats
+        ? `A ${stats.bufferMeters} m ring outside the generated shoreline covers ${Math.round(stats.herArea).toLocaleString('en-US')} m². Describe medicinal species, soil, access, and buffer stewardship.`
+        : 'Awaiting a planting note. Describe the 5 m upland buffer, suitable medicinal species, and stewardship considerations.';
+      setPlaceholder('fish', fishHint);
+      setPlaceholder('aeration', aerationHint);
+      setPlaceholder('herbs', herbHint);
+    }
+
+    function setPlaceholder(key, text) {
+      const note = document.querySelector(`.narrative[data-key="${key}"]`);
+      if (note) note.dataset.placeholder = text;
+    }
+
+    function setNarrativesEmptyState() {
+      document.querySelectorAll('.narrative').forEach(updateNarrativeEmptyState);
+    }
+
+    function updateNarrativeEmptyState(note) {
+      const empty = !note.textContent.replace(/ /g, ' ').trim();
+      note.classList.toggle('is-empty', empty);
+    }
+
+    function setNarrative(key, value) {
+      if (!CARE_KEYS.includes(key)) throw new Error(`Unknown narrative key "${key}". Use fish, aeration, or herbs.`);
+      const text = String(value ?? '').replace(/\r\n/g, '\n').trim();
+      state.narratives[key] = text;
+      const note = document.querySelector(`.narrative[data-key="${key}"]`);
+      if (note) {
+        note.textContent = text;
+        updateNarrativeEmptyState(note);
+      }
+    }
+
+    function resetNarratives() {
+      CARE_KEYS.forEach((key) => setNarrative(key, ''));
+    }
+
+    function toggleCareCard(card) {
+      if (!card) return;
+      const open = !card.classList.contains('is-open');
+      card.classList.toggle('is-open', open);
+      const toggle = card.querySelector('.care-toggle');
+      if (toggle) toggle.setAttribute('aria-expanded', String(open));
+      const body = card.querySelector('.care-body');
+      if (body) {
+        body.inert = !open;
+        body.setAttribute('aria-hidden', String(!open));
+      }
+    }
+
+    function toggleMobileSheet(force) {
+      if (!MOBILE_QUERY.matches) return;
+      const sidebar = $('sidebar');
+      const open = typeof force === 'boolean' ? force : !sidebar.classList.contains('is-open');
+      sidebar.classList.toggle('is-open', open);
+      $('sheetToggle').setAttribute('aria-expanded', String(open));
+      $('sheetLabel').textContent = open ? 'Close field notes' : 'Open field notes';
+      if (!open) $('sheetToggle').focus({ preventScroll: true });
+    }
+
+    // ==================================================================
+    // 7. AI BRIEF / GEOJSON EXPORT
+    // ==================================================================
+    function buildDataBrief() {
+      const stats = state.stats;
+      const fish = stats?.hasFishField ? `${stats.fishHits} flagged contacts` : 'not present in CSV';
+      const unitNote = state.effectiveUnit === 'ft' ? 'Depth values were converted from feet to metres.' : 'Depth values are metres.';
+      const lines = [
+        'LAKE ATLAS — FIELD DATA BRIEF',
+        'Prepared for an LLM to draft three short stewardship notes.',
+        '',
+        `Survey: ${state.sourceName || 'Unnamed survey'}`,
+        `Property: ${state.parcelName || 'No parcel boundary supplied'}`,
+        `Center: ${stats?.center ? `${stats.center.lat.toFixed(5)}, ${stats.center.lon.toFixed(5)}` : 'unknown'}`,
+        `Soundings: ${state.sonar.length}`,
+        `Lake surface: ${stats ? formatAcres(stats.areaM2) + ' acres' : 'not computed'}`,
+        `Shoreline: ${stats ? formatMeters(stats.shoreline) : 'not computed'}`,
+        `Maximum depth: ${stats ? formatDepth(stats.maxDepth) + ' m' : 'not computed'}`,
+        `Mean depth: ${stats ? formatDepth(stats.meanDepth) + ' m' : 'not computed'}`,
+        `Fish detections: ${fish}`,
+        `Aeration candidate: ${state.deepest ? `${state.deepest.lat.toFixed(5)}, ${state.deepest.lon.toFixed(5)} at ${formatDepth(state.deepest.depth)} m` : 'not computed'}`,
+        `Herb buffer: ${stats ? `${stats.bufferMeters} m ring (${formatSqMeters(stats.herArea)}) outside the concave hull` : 'not computed'}`,
+        `Parcel area: ${stats?.parcelArea ? formatAcres(stats.parcelArea) + ' acres' : 'unknown'}`,
+        unitNote,
+        '',
+        'Please draft three concise, site-specific sections (120–180 words each):',
+        '1. Fish Management',
+        '2. Aeration Benefits',
+        '3. Herb Cultivation',
+        '',
+        'Use only the measurements above. Do not invent water chemistry, species, permits, or legal setbacks. Flag fieldwork needed before installation or planting. Keep a calm, professional land-stewardship voice.',
+        '',
+        'Existing field notes (preserve any user-authored details):',
+        ...CARE_KEYS.map((key) => `- ${key}: ${state.narratives[key] || '(empty)'}`)
+      ];
+      return lines.join('\n');
+    }
+
+    async function copyDataBrief() {
+      if (!state.stats) {
+        showToast('Load a sonar CSV before copying a data brief.', 'error');
+        return;
+      }
+      const copied = await safeCopyText(buildDataBrief());
+      if (copied) showToast('AI data brief copied — paste it into your model.');
+      else showToast('Clipboard access was blocked. Select the brief manually.', 'error');
+    }
+
+    function exportAnalysisGeoJSON() {
+      if (!state.hull && !state.parcel) {
+        showToast('Load survey data before exporting.', 'error');
+        return;
+      }
+      const features = [];
+      if (state.parcel) features.push(...state.parcel.features.map((feature) => turf.feature(feature.geometry, { ...feature.properties, atlas_layer: 'property_boundary' })));
+      if (state.hull) features.push(turf.feature(state.hull.geometry, { atlas_layer: 'lake_hull', area_acres: Number(formatAcres(state.stats?.areaM2).replace(/,/g, '')) }));
+      if (state.herbZone) features.push(turf.feature(state.herbZone.geometry, { atlas_layer: 'medicinal_herb_buffer', buffer_meters: state.settings.bufferMeters, area_m2: state.stats?.herArea || null }));
+      if (state.deepest) features.push(turf.point([state.deepest.lon, state.deepest.lat], { atlas_layer: 'aeration_fountain', depth_m: state.deepest.depth, method: 'deepest_csv_sounding' }));
+      if (state.contours) {
+        state.contours.features.forEach((feature) => features.push(turf.feature(feature.geometry, { ...feature.properties, atlas_layer: 'depth_contour' })));
+      }
+      if (state.fishPoints) {
+        state.fishPoints.features.forEach((feature) => features.push(turf.feature(feature.geometry, { ...feature.properties, atlas_layer: 'fish_contact' })));
+      }
+      if (!features.length) {
+        showToast('There is no derived analysis to export yet.', 'error');
+        return;
+      }
+      const collection = {
+        type: 'FeatureCollection',
+        name: `${slugify(state.sourceName || state.parcelName)}-analysis`,
+        metadata: {
+          generated_at: new Date().toISOString(),
+          source: 'The Lake Atlas',
+          soundings: state.sonar.length,
+          max_depth_m: state.stats?.maxDepth ?? null,
+          mean_depth_m: state.stats?.meanDepth ?? null,
+          herb_buffer_m: state.settings.bufferMeters,
+          crs: 'EPSG:4326'
+        },
+        features
+      };
+      const blob = new Blob([JSON.stringify(collection, null, 2)], { type: 'application/geo+json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `${slugify(state.sourceName || state.parcelName)}-analysis.geojson`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast('Derived atlas layers exported as GeoJSON.');
+    }
+
+    // ==================================================================
+    // 8. DEMO SURVEY
+    // ------------------------------------------------------------------
+    // A reproducible, fictional pond in coastal Maine. It exercises the
+    // full pipeline before a real Deeper export is available. The demo is
+    // clearly labeled in the map plate and is replaced by any upload.
+    // ==================================================================
+    function mulberry32(seed) {
+      return function random() {
+        let t = seed += 0x6D2B79F5;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function loadDemo({ announce = false } = {}) {
+      const random = mulberry32(20260426);
+      const centerLon = -68.24382;
+      const centerLat = 44.30472;
+      const rx = 0.00138;
+      const ry = 0.00091;
+      const edge = (theta) => 1 + 0.145 * Math.sin(3 * theta + 0.45) + 0.072 * Math.cos(5 * theta - 1.05);
+
+      const raw = [];
+      for (let i = 0; i < 352; i += 1) {
+        const theta = random() * Math.PI * 2;
+        const radius = Math.sqrt(random()) * 0.91;
+        const shape = edge(theta);
+        const lon = centerLon + Math.cos(theta) * rx * radius * shape;
+        const lat = centerLat + Math.sin(theta) * ry * radius * shape;
+        const shore = 1 - radius;
+        const basin = Math.pow(shore, 1.33) * (0.84 + 0.16 * Math.cos(theta * 2 + 0.7));
+        const noise = (random() - 0.5) * 0.34;
+        const depth = clamp(0.28 + 7.55 * basin + noise, 0.18, 7.9);
+        let fish = 0;
+        if (depth < 2.7 && random() < 0.16) fish = 1 + Math.floor(random() * 4);
+        else if (depth < 4.6 && random() < 0.035) fish = 1 + Math.floor(random() * 2);
+        raw.push({ lat, lon, rawDepth: Number(depth.toFixed(2)), depth: Number(depth.toFixed(2)), fish, hasFishField: true });
+      }
+
+      // Add explicit shoreline returns so the concave hull reads as a full
+      // pond perimeter rather than the convex extent of a few transects.
+      for (let i = 0; i < 34; i += 1) {
+        const theta = (i / 34) * Math.PI * 2 + (random() - 0.5) * 0.035;
+        const radius = 0.975 + random() * 0.02;
+        const shape = edge(theta);
+        raw.push({
+          lat: centerLat + Math.sin(theta) * ry * radius * shape,
+          lon: centerLon + Math.cos(theta) * rx * radius * shape,
+          rawDepth: Number((0.22 + random() * 0.33).toFixed(2)),
+          depth: Number((0.22 + random() * 0.33).toFixed(2)),
+          fish: 0,
+          hasFishField: true
+        });
+      }
+
+      const propertyRing = [];
+      for (let i = 0; i < 13; i += 1) {
+        const theta = (i / 13) * Math.PI * 2;
+        const wobble = 1.66 + 0.075 * Math.sin(i * 2.3) + 0.045 * Math.cos(i * 1.4);
+        propertyRing.push([
+          centerLon + Math.cos(theta) * rx * wobble,
+          centerLat + Math.sin(theta) * ry * wobble
+        ]);
+      }
+      propertyRing.push(propertyRing[0].slice());
+
+      const demoProperty = turf.polygon([propertyRing], {
+        name: 'Larkspur Preserve',
+        PARCEL_ID: 'SAMPLE-0426',
+        ACRES: Number((turf.area(turf.polygon([propertyRing])) / 4046.8564224).toFixed(1)),
+        source: 'Illustrative boundary'
+      });
+      const parcel = turf.featureCollection([demoProperty]);
+
+      state.rawSonar = raw;
+      state.unitHint = 'm';
+      state.sourceName = 'Larkspur Pond';
+      state.sourceFileName = 'larkspur-pond-sample.csv';
+      state.parcel = parcel;
+      state.parcelName = 'Larkspur Preserve';
+      state.parcelFile = 'larkspur-preserve-sample.geojson';
+      state.hasFishField = true;
+      state.isDemo = true;
+      state.warnings = [];
+      state.userClearedDemo = false;
+      state.hasBootedDemo = true;
+      resetNarratives();
+      resetDerivedAnalysis();
+      applyDepthUnits();
+      updateIntakeUI();
+      updateChrome();
+
+      if (state.mapReady) {
+        runAnalysis({ fit: true, reason: 'demo' });
+        if (announce) showToast('Sample survey loaded. Upload a CSV to replace it.');
+      } else {
+        updateStatsPlaceholder();
+      }
+    }
+
+    function clearAllData() {
+      state.rawSonar = [];
+      state.sonar = [];
+      state.sourceName = '';
+      state.sourceFileName = '';
+      state.parcel = null;
+      state.parcelName = '';
+      state.parcelFile = '';
+      state.hasFishField = false;
+      state.isDemo = false;
+      state.userClearedDemo = true;
+      state.warnings = [];
+      state.renderToken += 1;
+      removeMapFishPopup();
+      resetDerivedAnalysis();
+      resetNarratives();
+      $('csvDrop').classList.remove('is-loaded', 'is-error');
+      $('geoDrop').classList.remove('is-loaded', 'is-error');
+      setSurveyState('Awaiting survey');
+      setDataStatus('Upload a Deeper Pro 2 CSV to build the shoreline, depth raster, fountain site, and herb buffer.');
+      updateIntakeUI();
+      updateStatsPlaceholder();
+      updateChrome();
+      updateLegend();
+      setBusy(false);
+      if (state.mapReady) {
+        renderMapLayers();
+        state.map.easeTo({ center: [-68.2438, 44.3048], zoom: 14.2, pitch: 45, bearing: -13, duration: 900 });
+      }
+      showToast('Survey cleared.');
+    }
+
+    function removeMapFishPopup() {
+      if (state.mapFishPopup) {
+        try { state.mapFishPopup.remove(); } catch (_) { /* noop */ }
+        state.mapFishPopup = null;
+      }
+    }
+
+    // ==================================================================
+    // 9. SETTINGS DRAWER / PUBLIC API
+    // ==================================================================
+    function openSettingsDrawer() {
+      syncSettingsControls();
+      $('settingsDrawer').hidden = false;
+      $('settingsToken').focus({ preventScroll: true });
+    }
+    function closeSettingsDrawer() {
+      $('settingsDrawer').hidden = true;
+      if (state.token) persistSettings();
+      if (state.map && state.mapReady) state.map.resize();
+    }
+
+    function reconnectMap() {
+      const token = $('settingsToken').value.trim();
+      const style = $('settingsStyle').value.trim() || CONFIG.defaultStyle;
+      if (!token) {
+        showToast('Add a Mapbox public token before reconnecting.', 'error');
+        $('settingsToken').focus();
+        return;
+      }
+      if (/^sk\./.test(token)) {
+        showToast('Use a public token beginning with "pk.", not a secret token.', 'error');
+        return;
+      }
+      state.token = token;
+      state.styleUrl = style;
+      persistSettings();
+      closeSettingsDrawer();
+      startAtlas({ initial: false });
+    }
+
+    function getSummary() {
+      if (!state.stats) {
+        return {
+          surveyName: state.sourceName || null,
+          propertyName: state.parcelName || null,
+          soundings: state.sonar.length,
+          isDemo: state.isDemo,
+          ready: Boolean(state.stats),
+          narratives: { ...state.narratives }
+        };
+      }
+      return {
+        surveyName: state.sourceName,
+        propertyName: state.parcelName,
+        isDemo: state.isDemo,
+        soundings: state.stats.soundings,
+        areaAcres: Number(formatAcres(state.stats.areaM2).replace(/,/g, '')),
+        areaSquareMeters: Math.round(state.stats.areaM2),
+        maxDepthMeters: Number(formatDepth(state.stats.maxDepth)),
+        meanDepthMeters: Number(formatDepth(state.stats.meanDepth)),
+        shorelineMeters: Math.round(state.stats.shoreline),
+        fishContacts: state.stats.hasFishField ? state.stats.fishHits : null,
+        herbBufferMeters: state.stats.bufferMeters,
+        herbBufferSquareMeters: Math.round(state.stats.herArea),
+        contourCount: state.contours ? state.contours.features.length : 0,
+        depthLevels: state.stats.depthLevels || [],
+        parcelAcres: state.stats.parcelArea ? Number(formatAcres(state.stats.parcelArea).replace(/,/g, '')) : null,
+        center: state.stats.center,
+        aerationSite: state.deepest ? { ...state.deepest, method: 'deepest_csv_sounding' } : null,
+        narratives: { ...state.narratives },
+        warnings: state.warnings.slice()
+      };
+    }
+
+    // Public integration surface for LLM-generated copy or a host app.
+    window.LakeAtlas = Object.freeze({
+      version: '1.1.0',
+      loadData,
+      setNarrative,
+      setNarratives(values = {}) {
+        CARE_KEYS.forEach((key) => {
+          if (Object.prototype.hasOwnProperty.call(values, key)) setNarrative(key, values[key]);
+        });
+      },
+      getNarrative(key) {
+        return CARE_KEYS.includes(key) ? state.narratives[key] : undefined;
+      },
+      getSummary,
+      refresh() {
+        if (state.rawSonar.length) return runAnalysis({ fit: false, reason: 'api' });
+        return Promise.resolve(getSummary());
+      },
+      fitToSurvey() { fitToData({ duration: 900 }); },
+      loadSample() { loadDemo({ announce: true }); }
+    });
+
+    // ---------------- Go ----------------
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', boot, { once: true });
+    } else {
+      boot();
+    }
+  })();
+  </script>
+
+  <!-- ---------------------------------------------------------------
+       Automatic server load
+       Calls the Flask backend on page load, pipes the CSV + GeoJSON
+       into the atlas, then injects the DeepSeek care notes. If the
+       server is offline, the app keeps working with manual uploads.
+       --------------------------------------------------------------- -->
+  <script>
+    (function () {
+      'use strict';
+
+      function waitForAtlas() {
+        return new Promise((resolve, reject) => {
+          let attempts = 0;
+          const timer = window.setInterval(() => {
+            if (window.LakeAtlas && typeof window.LakeAtlas.loadData === 'function') {
+              window.clearInterval(timer);
+              resolve(window.LakeAtlas);
+            } else if (++attempts >= 80) {
+              window.clearInterval(timer);
+              reject(new Error('LakeAtlas did not become ready.'));
+            }
+          }, 250);
+        });
+      }
+
+      async function loadFromServer() {
+        try {
+          const atlas = await waitForAtlas();
+          const response = await fetch('/api/lake-data', {
+            headers: { Accept: 'application/json' },
+            cache: 'no-store'
+          });
+          const payload = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(payload.error || `The server returned ${response.status}.`);
+          }
+          if (!payload.csv) throw new Error('The server response did not include CSV data.');
+
+          await atlas.loadData({
+            csv: payload.csv,
+            csvFileName: payload.csvFileName || 'mock_sonar_survey.csv',
+            geojson: payload.geojson || null,
+            geojsonFileName: payload.geojsonFileName || 'parcel.geojson'
+          });
+
+          const narratives = payload.narratives || {};
+          const usable = {};
+          ['fish', 'aeration', 'herbs'].forEach((key) => {
+            if (typeof narratives[key] === 'string' && narratives[key].trim()) {
+              usable[key] = narratives[key];
+            }
+          });
+          if (Object.keys(usable).length) atlas.setNarratives(usable);
+
+          window.lakeAtlasServer = {
+            stats: payload.stats || null,
+            narrativeStatus: payload.narrativeStatus || 'unknown',
+            warnings: Array.isArray(payload.warnings) ? payload.warnings.slice() : []
+          };
+          (payload.warnings || []).forEach((warning) => console.warn('[Lake Atlas] ' + warning));
+        } catch (error) {
+          console.warn('[Lake Atlas] Automatic server load skipped:', error);
+        }
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', loadFromServer, { once: true });
+      } else {
+        loadFromServer();
+      }
+    })();
+  </script>
+</body>
+</html>
